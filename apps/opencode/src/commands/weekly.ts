@@ -3,7 +3,6 @@ import {
 	addEmptySeparatorRow,
 	formatCurrency,
 	formatDateCompact,
-	formatModelsDisplayMultiline,
 	formatNumber,
 	ResponsiveTable,
 } from '@ccusage/terminal/table';
@@ -82,6 +81,16 @@ export const weeklyCommand = define({
 			totalTokens: number;
 			totalCost: number;
 			modelsUsed: string[];
+			modelBreakdown: Record<
+				string,
+				{
+					inputTokens: number;
+					outputTokens: number;
+					cacheCreationTokens: number;
+					cacheReadTokens: number;
+					totalCost: number;
+				}
+			>;
 		}> = [];
 
 		for (const [week, weekEntries] of Object.entries(entriesByWeek)) {
@@ -91,14 +100,42 @@ export const weeklyCommand = define({
 			let cacheReadTokens = 0;
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
+			const modelBreakdown: Record<
+				string,
+				{
+					inputTokens: number;
+					outputTokens: number;
+					cacheCreationTokens: number;
+					cacheReadTokens: number;
+					totalCost: number;
+				}
+			> = {};
 
 			for (const entry of weekEntries) {
+				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
-				totalCost += await calculateCostForEntry(entry, fetcher);
+				totalCost += cost;
 				modelsSet.add(entry.model);
+
+				let mb = modelBreakdown[entry.model];
+				if (mb == null) {
+					mb = {
+						inputTokens: 0,
+						outputTokens: 0,
+						cacheCreationTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+					};
+					modelBreakdown[entry.model] = mb;
+				}
+				mb.inputTokens += entry.usage.inputTokens;
+				mb.outputTokens += entry.usage.outputTokens;
+				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
+				mb.totalCost += cost;
 			}
 
 			const totalTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
@@ -112,6 +149,7 @@ export const weeklyCommand = define({
 				totalTokens,
 				totalCost,
 				modelsUsed: Array.from(modelsSet),
+				modelBreakdown,
 			});
 		}
 
@@ -165,19 +203,46 @@ export const weeklyCommand = define({
 		});
 
 		for (const data of weeklyData) {
+			// Summary Row
 			table.push([
-				data.week,
-				formatModelsDisplayMultiline(data.modelsUsed),
-				formatNumber(data.inputTokens),
-				formatNumber(data.outputTokens),
-				formatNumber(data.cacheCreationTokens),
-				formatNumber(data.cacheReadTokens),
-				formatNumber(data.totalTokens),
-				formatCurrency(data.totalCost),
+				pc.bold(data.week),
+				pc.bold('Weekly Total'),
+				pc.bold(formatNumber(data.inputTokens)),
+				pc.bold(formatNumber(data.outputTokens)),
+				pc.bold(formatNumber(data.cacheCreationTokens)),
+				pc.bold(formatNumber(data.cacheReadTokens)),
+				pc.bold(formatNumber(data.totalTokens)),
+				pc.bold(formatCurrency(data.totalCost)),
 			]);
+
+			// Breakdown Rows
+			const sortedModels = Object.entries(data.modelBreakdown).sort(
+				(a, b) => b[1].totalCost - a[1].totalCost,
+			);
+
+			for (const [model, metrics] of sortedModels) {
+				const totalModelTokens =
+					metrics.inputTokens +
+					metrics.outputTokens +
+					metrics.cacheCreationTokens +
+					metrics.cacheReadTokens;
+
+				table.push([
+					'',
+					pc.dim(`- ${model}`),
+					pc.dim(formatNumber(metrics.inputTokens)),
+					pc.dim(formatNumber(metrics.outputTokens)),
+					pc.dim(formatNumber(metrics.cacheCreationTokens)),
+					pc.dim(formatNumber(metrics.cacheReadTokens)),
+					pc.dim(formatNumber(totalModelTokens)),
+					pc.dim(formatCurrency(metrics.totalCost)),
+				]);
+			}
+
+			// Add separator after each week
+			addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		}
 
-		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		table.push([
 			pc.yellow('Total'),
 			'',

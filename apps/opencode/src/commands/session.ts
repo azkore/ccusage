@@ -63,6 +63,16 @@ export const sessionCommand = define({
 			totalCost: number;
 			modelsUsed: string[];
 			lastActivity: Date;
+			modelBreakdown: Record<
+				string,
+				{
+					inputTokens: number;
+					outputTokens: number;
+					cacheCreationTokens: number;
+					cacheReadTokens: number;
+					totalCost: number;
+				}
+			>;
 		};
 
 		const sessionData: SessionData[] = [];
@@ -75,18 +85,46 @@ export const sessionCommand = define({
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
 			let lastActivity = sessionEntries[0]!.timestamp;
+			const modelBreakdown: Record<
+				string,
+				{
+					inputTokens: number;
+					outputTokens: number;
+					cacheCreationTokens: number;
+					cacheReadTokens: number;
+					totalCost: number;
+				}
+			> = {};
 
 			for (const entry of sessionEntries) {
+				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
-				totalCost += await calculateCostForEntry(entry, fetcher);
+				totalCost += cost;
 				modelsSet.add(entry.model);
 
 				if (entry.timestamp > lastActivity) {
 					lastActivity = entry.timestamp;
 				}
+
+				let mb = modelBreakdown[entry.model];
+				if (mb == null) {
+					mb = {
+						inputTokens: 0,
+						outputTokens: 0,
+						cacheCreationTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+					};
+					modelBreakdown[entry.model] = mb;
+				}
+				mb.inputTokens += entry.usage.inputTokens;
+				mb.outputTokens += entry.usage.outputTokens;
+				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
+				mb.totalCost += cost;
 			}
 
 			const totalTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
@@ -105,6 +143,7 @@ export const sessionCommand = define({
 				totalCost,
 				modelsUsed: Array.from(modelsSet),
 				lastActivity,
+				modelBreakdown,
 			});
 		}
 
@@ -178,6 +217,30 @@ export const sessionCommand = define({
 				formatCurrency(parentSession.totalCost),
 			]);
 
+			// Breakdown for parent session
+			const sortedParentModels = Object.entries(parentSession.modelBreakdown).sort(
+				(a, b) => b[1].totalCost - a[1].totalCost,
+			);
+
+			for (const [model, metrics] of sortedParentModels) {
+				const totalModelTokens =
+					metrics.inputTokens +
+					metrics.outputTokens +
+					metrics.cacheCreationTokens +
+					metrics.cacheReadTokens;
+
+				table.push([
+					pc.dim(`  - ${model}`),
+					'',
+					pc.dim(formatNumber(metrics.inputTokens)),
+					pc.dim(formatNumber(metrics.outputTokens)),
+					pc.dim(formatNumber(metrics.cacheCreationTokens)),
+					pc.dim(formatNumber(metrics.cacheReadTokens)),
+					pc.dim(formatNumber(totalModelTokens)),
+					pc.dim(formatCurrency(metrics.totalCost)),
+				]);
+			}
+
 			const subSessions = sessionsByParent[parentSession.sessionID];
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
@@ -191,6 +254,30 @@ export const sessionCommand = define({
 						formatNumber(subSession.totalTokens),
 						formatCurrency(subSession.totalCost),
 					]);
+
+					// Breakdown for sub-session
+					const sortedSubModels = Object.entries(subSession.modelBreakdown).sort(
+						(a, b) => b[1].totalCost - a[1].totalCost,
+					);
+
+					for (const [model, metrics] of sortedSubModels) {
+						const totalModelTokens =
+							metrics.inputTokens +
+							metrics.outputTokens +
+							metrics.cacheCreationTokens +
+							metrics.cacheReadTokens;
+
+						table.push([
+							pc.dim(`    - ${model}`),
+							'',
+							pc.dim(formatNumber(metrics.inputTokens)),
+							pc.dim(formatNumber(metrics.outputTokens)),
+							pc.dim(formatNumber(metrics.cacheCreationTokens)),
+							pc.dim(formatNumber(metrics.cacheReadTokens)),
+							pc.dim(formatNumber(totalModelTokens)),
+							pc.dim(formatCurrency(metrics.totalCost)),
+						]);
+					}
 				}
 
 				const subtotalInputTokens =
