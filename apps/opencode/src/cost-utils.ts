@@ -133,17 +133,17 @@ export type ModelTokenData = {
 };
 
 /**
- * Format the "Input" column value: total input-side tokens with $/M rate.
- * Rate is the effective blended rate for non-cached input (net input + cache create).
- * When componentCosts is provided, shows the rate in parentheses.
+ * Format the "Input" column value: total input-side tokens with effective $/M rate.
+ * Rate = total input-side cost (net input + cache creation + cache read) / total input tokens.
+ * This shows the actual price paid per input token after caching discount.
  */
 export function formatInputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	if (componentCosts == null) {
 		return formatNumber(totalInput);
 	}
-	const nonCachedInput = data.inputTokens + data.cacheCreationTokens;
-	const rate = formatRate(componentCosts.inputCost, nonCachedInput);
+	const totalInputCost = componentCosts.inputCost + componentCosts.cacheReadCost;
+	const rate = formatRate(totalInputCost, totalInput);
 	return rate !== '' ? `${formatNumber(totalInput)} (${rate})` : formatNumber(totalInput);
 }
 
@@ -161,38 +161,32 @@ export function formatOutputColumn(data: ModelTokenData, componentCosts?: Compon
 }
 
 /**
- * Format the "Cache Hit" column value: percentage with $/M rate for cache reads.
+ * Format the "Cache" column value: absolute cache read tokens with hit %.
  * Cache hit % = cacheRead / (input + cacheCreate + cacheRead)
  */
-export function formatCacheHitColumn(
-	data: ModelTokenData,
-	componentCosts?: ComponentCosts,
-): string {
+export function formatCacheColumn(data: ModelTokenData): string {
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	if (totalInput <= 0) {
-		return '0%';
+		return `${formatNumber(0)} (0%)`;
 	}
 	const pct = ((data.cacheReadTokens / totalInput) * 100).toFixed(0);
-	if (componentCosts == null) {
-		return `${pct}%`;
-	}
-	const rate = formatRate(componentCosts.cacheReadCost, data.cacheReadTokens);
-	return rate !== '' ? `${pct}% (${rate})` : `${pct}%`;
+	return `${formatNumber(data.cacheReadTokens)} (${pct}%)`;
 }
 
 /**
- * Compute cache hit % for an aggregate of multiple models (no $/M rate).
+ * Compute cache column for an aggregate of multiple models.
  */
-export function formatAggregateCacheHit(
+export function formatAggregateCacheColumn(
 	inputTokens: number,
 	cacheCreationTokens: number,
 	cacheReadTokens: number,
 ): string {
 	const totalInput = inputTokens + cacheCreationTokens + cacheReadTokens;
 	if (totalInput <= 0) {
-		return '0%';
+		return `${formatNumber(0)} (0%)`;
 	}
-	return `${((cacheReadTokens / totalInput) * 100).toFixed(0)}%`;
+	const pct = ((cacheReadTokens / totalInput) * 100).toFixed(0);
+	return `${formatNumber(cacheReadTokens)} (${pct}%)`;
 }
 
 /**

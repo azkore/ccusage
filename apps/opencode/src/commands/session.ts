@@ -14,8 +14,8 @@ import pc from 'picocolors';
 import {
 	calculateComponentCosts,
 	calculateCostForEntry,
-	formatAggregateCacheHit,
-	formatCacheHitColumn,
+	formatAggregateCacheColumn,
+	formatCacheColumn,
 	formatInputColumn,
 	formatOutputColumn,
 } from '../cost-utils.ts';
@@ -162,7 +162,7 @@ export const sessionCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Sessions\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Session', 'Models', 'Input', 'Output', 'Cache Hit', 'Cost (USD)'],
+			head: ['Session', 'Models', 'Input', 'Output', 'Cache', 'Cost (USD)'],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
 			compactHead: ['Session', 'Models', 'Input', 'Output', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
@@ -193,7 +193,7 @@ export const sessionCommand = define({
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
 				formatNumber(parentInput),
 				formatNumber(parentSession.outputTokens),
-				formatAggregateCacheHit(
+				formatAggregateCacheColumn(
 					parentSession.inputTokens,
 					parentSession.cacheCreationTokens,
 					parentSession.cacheReadTokens,
@@ -218,7 +218,7 @@ export const sessionCommand = define({
 					'',
 					pc.dim(formatInputColumn(metrics, componentCosts)),
 					pc.dim(formatOutputColumn(metrics, componentCosts)),
-					pc.dim(formatCacheHitColumn(metrics, componentCosts)),
+					pc.dim(formatCacheColumn(metrics)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
 			}
@@ -234,7 +234,7 @@ export const sessionCommand = define({
 						formatModelsDisplayMultiline(subSession.modelsUsed),
 						formatNumber(subInput),
 						formatNumber(subSession.outputTokens),
-						formatAggregateCacheHit(
+						formatAggregateCacheColumn(
 							subSession.inputTokens,
 							subSession.cacheCreationTokens,
 							subSession.cacheReadTokens,
@@ -259,7 +259,7 @@ export const sessionCommand = define({
 							'',
 							pc.dim(formatInputColumn(metrics, componentCosts)),
 							pc.dim(formatOutputColumn(metrics, componentCosts)),
-							pc.dim(formatCacheHitColumn(metrics, componentCosts)),
+							pc.dim(formatCacheColumn(metrics)),
 							pc.dim(formatCurrency(metrics.totalCost)),
 						]);
 					}
@@ -287,7 +287,7 @@ export const sessionCommand = define({
 					pc.yellow(formatNumber(subtotalInput)),
 					pc.yellow(formatNumber(subtotalOutputTokens)),
 					pc.yellow(
-						formatAggregateCacheHit(
+						formatAggregateCacheColumn(
 							subtotalInputTokens,
 							subtotalCacheCreationTokens,
 							subtotalCacheReadTokens,
@@ -307,7 +307,7 @@ export const sessionCommand = define({
 			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(formatNumber(totals.outputTokens)),
 			pc.yellow(
-				formatAggregateCacheHit(
+				formatAggregateCacheColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,

@@ -12,8 +12,8 @@ import pc from 'picocolors';
 import {
 	calculateComponentCosts,
 	calculateCostForEntry,
-	formatAggregateCacheHit,
-	formatCacheHitColumn,
+	formatAggregateCacheColumn,
+	formatCacheColumn,
 	formatInputColumn,
 	formatOutputColumn,
 	totalInputTokens,
@@ -136,7 +136,7 @@ export const modelCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - By Model\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Model', 'Input', 'Output', 'Cache Hit', 'Cost (USD)'],
+			head: ['Model', 'Input', 'Output', 'Cache', 'Cost (USD)'],
 			colAligns: ['left', 'right', 'right', 'right', 'right'],
 			compactHead: ['Model', 'Input', 'Output', 'Cost (USD)'],
 			compactColAligns: ['left', 'right', 'right', 'right'],
@@ -150,7 +150,7 @@ export const modelCommand = define({
 				pc.bold(data.model),
 				formatInputColumn(data, data.componentCosts),
 				formatOutputColumn(data, data.componentCosts),
-				formatCacheHitColumn(data, data.componentCosts),
+				formatCacheColumn(data),
 				formatCurrency(data.totalCost),
 			]);
 		}
@@ -163,7 +163,7 @@ export const modelCommand = define({
 			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(formatNumber(totals.outputTokens)),
 			pc.yellow(
-				formatAggregateCacheHit(
+				formatAggregateCacheColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,

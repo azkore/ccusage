@@ -13,8 +13,8 @@ import pc from 'picocolors';
 import {
 	calculateComponentCosts,
 	calculateCostForEntry,
-	formatAggregateCacheHit,
-	formatCacheHitColumn,
+	formatAggregateCacheColumn,
+	formatCacheColumn,
 	formatInputColumn,
 	formatOutputColumn,
 } from '../cost-utils.ts';
@@ -168,7 +168,7 @@ export const weeklyCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Weekly\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Week', 'Models', 'Input', 'Output', 'Cache Hit', 'Cost (USD)'],
+			head: ['Week', 'Models', 'Input', 'Output', 'Cache', 'Cost (USD)'],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
 			compactHead: ['Week', 'Models', 'Input', 'Output', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
@@ -188,7 +188,11 @@ export const weeklyCommand = define({
 				pc.bold(formatNumber(weekInput)),
 				pc.bold(formatNumber(data.outputTokens)),
 				pc.bold(
-					formatAggregateCacheHit(data.inputTokens, data.cacheCreationTokens, data.cacheReadTokens),
+					formatAggregateCacheColumn(
+						data.inputTokens,
+						data.cacheCreationTokens,
+						data.cacheReadTokens,
+					),
 				),
 				pc.bold(formatCurrency(data.totalCost)),
 			]);
@@ -210,7 +214,7 @@ export const weeklyCommand = define({
 					pc.dim(`- ${model}`),
 					pc.dim(formatInputColumn(metrics, componentCosts)),
 					pc.dim(formatOutputColumn(metrics, componentCosts)),
-					pc.dim(formatCacheHitColumn(metrics, componentCosts)),
+					pc.dim(formatCacheColumn(metrics)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
 			}
@@ -226,7 +230,7 @@ export const weeklyCommand = define({
 			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(formatNumber(totals.outputTokens)),
 			pc.yellow(
-				formatAggregateCacheHit(
+				formatAggregateCacheColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,
