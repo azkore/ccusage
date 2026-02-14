@@ -206,13 +206,24 @@ export const sessionCommand = define({
 				? pc.bold(parentSession.sessionTitle)
 				: parentSession.sessionTitle;
 
+			// Calculate cache hit rate for parent session
+			const parentCacheHitRate =
+				parentSession.inputTokens + parentSession.cacheReadTokens > 0
+					? (parentSession.cacheReadTokens /
+							(parentSession.inputTokens + parentSession.cacheReadTokens)) *
+						100
+					: 0;
+			const parentCacheReadDisplay = `${formatNumber(parentSession.cacheReadTokens)}${
+				parentCacheHitRate > 0 ? ` (${parentCacheHitRate.toFixed(0)}%)` : ''
+			}`;
+
 			table.push([
 				displayTitle,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
 				formatNumber(parentSession.inputTokens),
 				formatNumber(parentSession.outputTokens),
 				formatNumber(parentSession.cacheCreationTokens),
-				formatNumber(parentSession.cacheReadTokens),
+				parentCacheReadDisplay,
 				formatNumber(parentSession.totalTokens),
 				formatCurrency(parentSession.totalCost),
 			]);
@@ -229,13 +240,21 @@ export const sessionCommand = define({
 					metrics.cacheCreationTokens +
 					metrics.cacheReadTokens;
 
+				const modelHitRate =
+					metrics.inputTokens + metrics.cacheReadTokens > 0
+						? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
+						: 0;
+				const modelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
+					modelHitRate > 0 ? ` (${modelHitRate.toFixed(0)}%)` : ''
+				}`;
+
 				table.push([
 					pc.dim(`  - ${model}`),
 					'',
 					pc.dim(formatNumber(metrics.inputTokens)),
 					pc.dim(formatNumber(metrics.outputTokens)),
 					pc.dim(formatNumber(metrics.cacheCreationTokens)),
-					pc.dim(formatNumber(metrics.cacheReadTokens)),
+					pc.dim(modelCacheReadDisplay),
 					pc.dim(formatNumber(totalModelTokens)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
@@ -244,13 +263,24 @@ export const sessionCommand = define({
 			const subSessions = sessionsByParent[parentSession.sessionID];
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
+					// Calculate cache hit rate for sub-session
+					const subCacheHitRate =
+						subSession.inputTokens + subSession.cacheReadTokens > 0
+							? (subSession.cacheReadTokens /
+									(subSession.inputTokens + subSession.cacheReadTokens)) *
+								100
+							: 0;
+					const subCacheReadDisplay = `${formatNumber(subSession.cacheReadTokens)}${
+						subCacheHitRate > 0 ? ` (${subCacheHitRate.toFixed(0)}%)` : ''
+					}`;
+
 					table.push([
 						`  ↳ ${subSession.sessionTitle}`,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
 						formatNumber(subSession.inputTokens),
 						formatNumber(subSession.outputTokens),
 						formatNumber(subSession.cacheCreationTokens),
-						formatNumber(subSession.cacheReadTokens),
+						subCacheReadDisplay,
 						formatNumber(subSession.totalTokens),
 						formatCurrency(subSession.totalCost),
 					]);
@@ -267,13 +297,21 @@ export const sessionCommand = define({
 							metrics.cacheCreationTokens +
 							metrics.cacheReadTokens;
 
+						const subModelHitRate =
+							metrics.inputTokens + metrics.cacheReadTokens > 0
+								? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
+								: 0;
+						const subModelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
+							subModelHitRate > 0 ? ` (${subModelHitRate.toFixed(0)}%)` : ''
+						}`;
+
 						table.push([
 							pc.dim(`    - ${model}`),
 							'',
 							pc.dim(formatNumber(metrics.inputTokens)),
 							pc.dim(formatNumber(metrics.outputTokens)),
 							pc.dim(formatNumber(metrics.cacheCreationTokens)),
-							pc.dim(formatNumber(metrics.cacheReadTokens)),
+							pc.dim(subModelCacheReadDisplay),
 							pc.dim(formatNumber(totalModelTokens)),
 							pc.dim(formatCurrency(metrics.totalCost)),
 						]);
@@ -295,18 +333,34 @@ export const sessionCommand = define({
 				const subtotalCost =
 					parentSession.totalCost + subSessions.reduce((sum, s) => sum + s.totalCost, 0);
 
+				const subtotalHitRate =
+					subtotalInputTokens + subtotalCacheReadTokens > 0
+						? (subtotalCacheReadTokens / (subtotalInputTokens + subtotalCacheReadTokens)) * 100
+						: 0;
+				const subtotalCacheReadDisplay = `${formatNumber(subtotalCacheReadTokens)}${
+					subtotalHitRate > 0 ? ` (${subtotalHitRate.toFixed(0)}%)` : ''
+				}`;
+
 				table.push([
 					pc.dim('  Total (with subagents)'),
 					'',
 					pc.yellow(formatNumber(subtotalInputTokens)),
 					pc.yellow(formatNumber(subtotalOutputTokens)),
 					pc.yellow(formatNumber(subtotalCacheCreationTokens)),
-					pc.yellow(formatNumber(subtotalCacheReadTokens)),
+					pc.yellow(subtotalCacheReadDisplay),
 					pc.yellow(formatNumber(subtotalTotalTokens)),
 					pc.yellow(formatCurrency(subtotalCost)),
 				]);
 			}
 		}
+
+		const totalHitRate =
+			totals.inputTokens + totals.cacheReadTokens > 0
+				? (totals.cacheReadTokens / (totals.inputTokens + totals.cacheReadTokens)) * 100
+				: 0;
+		const totalCacheReadDisplay = `${formatNumber(totals.cacheReadTokens)}${
+			totalHitRate > 0 ? ` (${totalHitRate.toFixed(0)}%)` : ''
+		}`;
 
 		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		table.push([
@@ -315,7 +369,7 @@ export const sessionCommand = define({
 			pc.yellow(formatNumber(totals.inputTokens)),
 			pc.yellow(formatNumber(totals.outputTokens)),
 			pc.yellow(formatNumber(totals.cacheCreationTokens)),
-			pc.yellow(formatNumber(totals.cacheReadTokens)),
+			pc.yellow(totalCacheReadDisplay),
 			pc.yellow(formatNumber(totals.totalTokens)),
 			pc.yellow(formatCurrency(totals.totalCost)),
 		]);

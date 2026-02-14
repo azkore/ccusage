@@ -178,6 +178,15 @@ export const monthlyCommand = define({
 		});
 
 		for (const data of monthlyData) {
+			// Calculate cache hit rate
+			const cacheHitRate =
+				data.inputTokens + data.cacheReadTokens > 0
+					? (data.cacheReadTokens / (data.inputTokens + data.cacheReadTokens)) * 100
+					: 0;
+			const cacheReadDisplay = `${formatNumber(data.cacheReadTokens)}${
+				cacheHitRate > 0 ? ` (${cacheHitRate.toFixed(0)}%)` : ''
+			}`;
+
 			// Summary Row
 			table.push([
 				pc.bold(data.month),
@@ -185,7 +194,7 @@ export const monthlyCommand = define({
 				pc.bold(formatNumber(data.inputTokens)),
 				pc.bold(formatNumber(data.outputTokens)),
 				pc.bold(formatNumber(data.cacheCreationTokens)),
-				pc.bold(formatNumber(data.cacheReadTokens)),
+				pc.bold(cacheReadDisplay),
 				pc.bold(formatNumber(data.totalTokens)),
 				pc.bold(formatCurrency(data.totalCost)),
 			]);
@@ -202,13 +211,21 @@ export const monthlyCommand = define({
 					metrics.cacheCreationTokens +
 					metrics.cacheReadTokens;
 
+				const modelHitRate =
+					metrics.inputTokens + metrics.cacheReadTokens > 0
+						? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
+						: 0;
+				const modelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
+					modelHitRate > 0 ? ` (${modelHitRate.toFixed(0)}%)` : ''
+				}`;
+
 				table.push([
 					'',
 					pc.dim(`- ${model}`),
 					pc.dim(formatNumber(metrics.inputTokens)),
 					pc.dim(formatNumber(metrics.outputTokens)),
 					pc.dim(formatNumber(metrics.cacheCreationTokens)),
-					pc.dim(formatNumber(metrics.cacheReadTokens)),
+					pc.dim(modelCacheReadDisplay),
 					pc.dim(formatNumber(totalModelTokens)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
@@ -218,13 +235,21 @@ export const monthlyCommand = define({
 			addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		}
 
+		const totalHitRate =
+			totals.inputTokens + totals.cacheReadTokens > 0
+				? (totals.cacheReadTokens / (totals.inputTokens + totals.cacheReadTokens)) * 100
+				: 0;
+		const totalCacheReadDisplay = `${formatNumber(totals.cacheReadTokens)}${
+			totalHitRate > 0 ? ` (${totalHitRate.toFixed(0)}%)` : ''
+		}`;
+
 		table.push([
 			pc.yellow('Total'),
 			'',
 			pc.yellow(formatNumber(totals.inputTokens)),
 			pc.yellow(formatNumber(totals.outputTokens)),
 			pc.yellow(formatNumber(totals.cacheCreationTokens)),
-			pc.yellow(formatNumber(totals.cacheReadTokens)),
+			pc.yellow(totalCacheReadDisplay),
 			pc.yellow(formatNumber(totals.totalTokens)),
 			pc.yellow(formatCurrency(totals.totalCost)),
 		]);
