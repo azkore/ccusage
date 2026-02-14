@@ -1,3 +1,4 @@
+import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import {
 	addEmptySeparatorRow,
@@ -10,11 +11,18 @@ import {
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
-import { calculateCostForEntry } from '../cost-utils.ts';
+import {
+	calculateComponentCosts,
+	calculateCostForEntry,
+	formatAggregateCacheHit,
+	formatCacheHitColumn,
+	formatInputColumn,
+	formatOutputColumn,
+} from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 8;
+const TABLE_COLUMN_COUNT = 6;
 
 export const sessionCommand = define({
 	name: 'session',
@@ -59,20 +67,10 @@ export const sessionCommand = define({
 			outputTokens: number;
 			cacheCreationTokens: number;
 			cacheReadTokens: number;
-			totalTokens: number;
 			totalCost: number;
 			modelsUsed: string[];
 			lastActivity: Date;
-			modelBreakdown: Record<
-				string,
-				{
-					inputTokens: number;
-					outputTokens: number;
-					cacheCreationTokens: number;
-					cacheReadTokens: number;
-					totalCost: number;
-				}
-			>;
+			modelBreakdown: Record<string, ModelTokenData>;
 		};
 
 		const sessionData: SessionData[] = [];
@@ -85,16 +83,7 @@ export const sessionCommand = define({
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
 			let lastActivity = sessionEntries[0]!.timestamp;
-			const modelBreakdown: Record<
-				string,
-				{
-					inputTokens: number;
-					outputTokens: number;
-					cacheCreationTokens: number;
-					cacheReadTokens: number;
-					totalCost: number;
-				}
-			> = {};
+			const modelBreakdown: Record<string, ModelTokenData> = {};
 
 			for (const entry of sessionEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
@@ -127,8 +116,6 @@ export const sessionCommand = define({
 				mb.totalCost += cost;
 			}
 
-			const totalTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
-
 			const metadata = sessionMetadataMap.get(sessionID);
 
 			sessionData.push({
@@ -139,7 +126,6 @@ export const sessionCommand = define({
 				outputTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
-				totalTokens,
 				totalCost,
 				modelsUsed: Array.from(modelsSet),
 				lastActivity,
@@ -154,7 +140,6 @@ export const sessionCommand = define({
 			outputTokens: sessionData.reduce((sum, s) => sum + s.outputTokens, 0),
 			cacheCreationTokens: sessionData.reduce((sum, s) => sum + s.cacheCreationTokens, 0),
 			cacheReadTokens: sessionData.reduce((sum, s) => sum + s.cacheReadTokens, 0),
-			totalTokens: sessionData.reduce((sum, s) => sum + s.totalTokens, 0),
 			totalCost: sessionData.reduce((sum, s) => sum + s.totalCost, 0),
 		};
 
@@ -177,20 +162,11 @@ export const sessionCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Sessions\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: [
-				'Session',
-				'Models',
-				'Input',
-				'Output',
-				'Cache Create',
-				'Cache Read',
-				'Total Tokens',
-				'Cost (USD)',
-			],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right', 'right'],
+			head: ['Session', 'Models', 'Input', 'Output', 'Cache Hit', 'Cost (USD)'],
+			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
 			compactHead: ['Session', 'Models', 'Input', 'Output', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
-			compactThreshold: 100,
+			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
 			style: { head: ['cyan'] },
 			dateFormatter: (dateStr: string) => formatDateCompact(dateStr),
@@ -206,56 +182,43 @@ export const sessionCommand = define({
 				? pc.bold(parentSession.sessionTitle)
 				: parentSession.sessionTitle;
 
-			// Calculate cache hit rate for parent session
-			const parentCacheHitRate =
-				parentSession.inputTokens + parentSession.cacheReadTokens > 0
-					? (parentSession.cacheReadTokens /
-							(parentSession.inputTokens + parentSession.cacheReadTokens)) *
-						100
-					: 0;
-			const parentCacheReadDisplay = `${formatNumber(parentSession.cacheReadTokens)}${
-				parentCacheHitRate > 0 ? ` (${parentCacheHitRate.toFixed(0)}%)` : ''
-			}`;
+			const parentInput =
+				parentSession.inputTokens +
+				parentSession.cacheCreationTokens +
+				parentSession.cacheReadTokens;
 
+			// Session summary row (no $/M — may have mixed models)
 			table.push([
 				displayTitle,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
-				formatNumber(parentSession.inputTokens),
+				formatNumber(parentInput),
 				formatNumber(parentSession.outputTokens),
-				formatNumber(parentSession.cacheCreationTokens),
-				parentCacheReadDisplay,
-				formatNumber(parentSession.totalTokens),
+				formatAggregateCacheHit(
+					parentSession.inputTokens,
+					parentSession.cacheCreationTokens,
+					parentSession.cacheReadTokens,
+				),
 				formatCurrency(parentSession.totalCost),
 			]);
 
-			// Breakdown for parent session
+			// Per-model breakdown rows (with $/M rates)
 			const sortedParentModels = Object.entries(parentSession.modelBreakdown).sort(
 				(a, b) => b[1].totalCost - a[1].totalCost,
 			);
 
 			for (const [model, metrics] of sortedParentModels) {
-				const totalModelTokens =
-					metrics.inputTokens +
-					metrics.outputTokens +
-					metrics.cacheCreationTokens +
-					metrics.cacheReadTokens;
-
-				const modelHitRate =
-					metrics.inputTokens + metrics.cacheReadTokens > 0
-						? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
-						: 0;
-				const modelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
-					modelHitRate > 0 ? ` (${modelHitRate.toFixed(0)}%)` : ''
-				}`;
+				const componentCosts: ComponentCosts = await calculateComponentCosts(
+					metrics,
+					model,
+					fetcher,
+				);
 
 				table.push([
 					pc.dim(`  - ${model}`),
 					'',
-					pc.dim(formatNumber(metrics.inputTokens)),
-					pc.dim(formatNumber(metrics.outputTokens)),
-					pc.dim(formatNumber(metrics.cacheCreationTokens)),
-					pc.dim(modelCacheReadDisplay),
-					pc.dim(formatNumber(totalModelTokens)),
+					pc.dim(formatInputColumn(metrics, componentCosts)),
+					pc.dim(formatOutputColumn(metrics, componentCosts)),
+					pc.dim(formatCacheHitColumn(metrics, componentCosts)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
 			}
@@ -263,56 +226,40 @@ export const sessionCommand = define({
 			const subSessions = sessionsByParent[parentSession.sessionID];
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
-					// Calculate cache hit rate for sub-session
-					const subCacheHitRate =
-						subSession.inputTokens + subSession.cacheReadTokens > 0
-							? (subSession.cacheReadTokens /
-									(subSession.inputTokens + subSession.cacheReadTokens)) *
-								100
-							: 0;
-					const subCacheReadDisplay = `${formatNumber(subSession.cacheReadTokens)}${
-						subCacheHitRate > 0 ? ` (${subCacheHitRate.toFixed(0)}%)` : ''
-					}`;
+					const subInput =
+						subSession.inputTokens + subSession.cacheCreationTokens + subSession.cacheReadTokens;
 
 					table.push([
 						`  ↳ ${subSession.sessionTitle}`,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
-						formatNumber(subSession.inputTokens),
+						formatNumber(subInput),
 						formatNumber(subSession.outputTokens),
-						formatNumber(subSession.cacheCreationTokens),
-						subCacheReadDisplay,
-						formatNumber(subSession.totalTokens),
+						formatAggregateCacheHit(
+							subSession.inputTokens,
+							subSession.cacheCreationTokens,
+							subSession.cacheReadTokens,
+						),
 						formatCurrency(subSession.totalCost),
 					]);
 
-					// Breakdown for sub-session
+					// Per-model breakdown for sub-session (with $/M rates)
 					const sortedSubModels = Object.entries(subSession.modelBreakdown).sort(
 						(a, b) => b[1].totalCost - a[1].totalCost,
 					);
 
 					for (const [model, metrics] of sortedSubModels) {
-						const totalModelTokens =
-							metrics.inputTokens +
-							metrics.outputTokens +
-							metrics.cacheCreationTokens +
-							metrics.cacheReadTokens;
-
-						const subModelHitRate =
-							metrics.inputTokens + metrics.cacheReadTokens > 0
-								? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
-								: 0;
-						const subModelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
-							subModelHitRate > 0 ? ` (${subModelHitRate.toFixed(0)}%)` : ''
-						}`;
+						const componentCosts: ComponentCosts = await calculateComponentCosts(
+							metrics,
+							model,
+							fetcher,
+						);
 
 						table.push([
 							pc.dim(`    - ${model}`),
 							'',
-							pc.dim(formatNumber(metrics.inputTokens)),
-							pc.dim(formatNumber(metrics.outputTokens)),
-							pc.dim(formatNumber(metrics.cacheCreationTokens)),
-							pc.dim(subModelCacheReadDisplay),
-							pc.dim(formatNumber(totalModelTokens)),
+							pc.dim(formatInputColumn(metrics, componentCosts)),
+							pc.dim(formatOutputColumn(metrics, componentCosts)),
+							pc.dim(formatCacheHitColumn(metrics, componentCosts)),
 							pc.dim(formatCurrency(metrics.totalCost)),
 						]);
 					}
@@ -328,49 +275,44 @@ export const sessionCommand = define({
 				const subtotalCacheReadTokens =
 					parentSession.cacheReadTokens +
 					subSessions.reduce((sum, s) => sum + s.cacheReadTokens, 0);
-				const subtotalTotalTokens =
-					parentSession.totalTokens + subSessions.reduce((sum, s) => sum + s.totalTokens, 0);
 				const subtotalCost =
 					parentSession.totalCost + subSessions.reduce((sum, s) => sum + s.totalCost, 0);
 
-				const subtotalHitRate =
-					subtotalInputTokens + subtotalCacheReadTokens > 0
-						? (subtotalCacheReadTokens / (subtotalInputTokens + subtotalCacheReadTokens)) * 100
-						: 0;
-				const subtotalCacheReadDisplay = `${formatNumber(subtotalCacheReadTokens)}${
-					subtotalHitRate > 0 ? ` (${subtotalHitRate.toFixed(0)}%)` : ''
-				}`;
+				const subtotalInput =
+					subtotalInputTokens + subtotalCacheCreationTokens + subtotalCacheReadTokens;
 
 				table.push([
 					pc.dim('  Total (with subagents)'),
 					'',
-					pc.yellow(formatNumber(subtotalInputTokens)),
+					pc.yellow(formatNumber(subtotalInput)),
 					pc.yellow(formatNumber(subtotalOutputTokens)),
-					pc.yellow(formatNumber(subtotalCacheCreationTokens)),
-					pc.yellow(subtotalCacheReadDisplay),
-					pc.yellow(formatNumber(subtotalTotalTokens)),
+					pc.yellow(
+						formatAggregateCacheHit(
+							subtotalInputTokens,
+							subtotalCacheCreationTokens,
+							subtotalCacheReadTokens,
+						),
+					),
 					pc.yellow(formatCurrency(subtotalCost)),
 				]);
 			}
 		}
 
-		const totalHitRate =
-			totals.inputTokens + totals.cacheReadTokens > 0
-				? (totals.cacheReadTokens / (totals.inputTokens + totals.cacheReadTokens)) * 100
-				: 0;
-		const totalCacheReadDisplay = `${formatNumber(totals.cacheReadTokens)}${
-			totalHitRate > 0 ? ` (${totalHitRate.toFixed(0)}%)` : ''
-		}`;
+		const totalInput = totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens;
 
 		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatNumber(totals.inputTokens)),
+			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(formatNumber(totals.outputTokens)),
-			pc.yellow(formatNumber(totals.cacheCreationTokens)),
-			pc.yellow(totalCacheReadDisplay),
-			pc.yellow(formatNumber(totals.totalTokens)),
+			pc.yellow(
+				formatAggregateCacheHit(
+					totals.inputTokens,
+					totals.cacheCreationTokens,
+					totals.cacheReadTokens,
+				),
+			),
 			pc.yellow(formatCurrency(totals.totalCost)),
 		]);
 
@@ -381,7 +323,7 @@ export const sessionCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see cache metrics and total tokens');
+			console.log('Expand terminal width to see cache metrics');
 		}
 	},
 });

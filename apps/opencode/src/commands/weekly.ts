@@ -1,3 +1,4 @@
+import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import {
 	addEmptySeparatorRow,
@@ -9,11 +10,18 @@ import {
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
-import { calculateCostForEntry } from '../cost-utils.ts';
+import {
+	calculateComponentCosts,
+	calculateCostForEntry,
+	formatAggregateCacheHit,
+	formatCacheHitColumn,
+	formatInputColumn,
+	formatOutputColumn,
+} from '../cost-utils.ts';
 import { loadOpenCodeMessages } from '../data-loader.ts';
 import { logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 8;
+const TABLE_COLUMN_COUNT = 6;
 
 /**
  * Get ISO week number for a date
@@ -78,19 +86,9 @@ export const weeklyCommand = define({
 			outputTokens: number;
 			cacheCreationTokens: number;
 			cacheReadTokens: number;
-			totalTokens: number;
 			totalCost: number;
 			modelsUsed: string[];
-			modelBreakdown: Record<
-				string,
-				{
-					inputTokens: number;
-					outputTokens: number;
-					cacheCreationTokens: number;
-					cacheReadTokens: number;
-					totalCost: number;
-				}
-			>;
+			modelBreakdown: Record<string, ModelTokenData>;
 		}> = [];
 
 		for (const [week, weekEntries] of Object.entries(entriesByWeek)) {
@@ -100,16 +98,7 @@ export const weeklyCommand = define({
 			let cacheReadTokens = 0;
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
-			const modelBreakdown: Record<
-				string,
-				{
-					inputTokens: number;
-					outputTokens: number;
-					cacheCreationTokens: number;
-					cacheReadTokens: number;
-					totalCost: number;
-				}
-			> = {};
+			const modelBreakdown: Record<string, ModelTokenData> = {};
 
 			for (const entry of weekEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
@@ -138,15 +127,12 @@ export const weeklyCommand = define({
 				mb.totalCost += cost;
 			}
 
-			const totalTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
-
 			weeklyData.push({
 				week,
 				inputTokens,
 				outputTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
-				totalTokens,
 				totalCost,
 				modelsUsed: Array.from(modelsSet),
 				modelBreakdown,
@@ -160,7 +146,6 @@ export const weeklyCommand = define({
 			outputTokens: weeklyData.reduce((sum, d) => sum + d.outputTokens, 0),
 			cacheCreationTokens: weeklyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
 			cacheReadTokens: weeklyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
-			totalTokens: weeklyData.reduce((sum, d) => sum + d.totalTokens, 0),
 			totalCost: weeklyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
 
@@ -183,75 +168,49 @@ export const weeklyCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Weekly\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: [
-				'Week',
-				'Models',
-				'Input',
-				'Output',
-				'Cache Create',
-				'Cache Read',
-				'Total Tokens',
-				'Cost (USD)',
-			],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right', 'right'],
+			head: ['Week', 'Models', 'Input', 'Output', 'Cache Hit', 'Cost (USD)'],
+			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
 			compactHead: ['Week', 'Models', 'Input', 'Output', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
-			compactThreshold: 100,
+			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
 			style: { head: ['cyan'] },
 			dateFormatter: (dateStr: string) => formatDateCompact(dateStr),
 		});
 
 		for (const data of weeklyData) {
-			// Calculate cache hit rate
-			const cacheHitRate =
-				data.inputTokens + data.cacheReadTokens > 0
-					? (data.cacheReadTokens / (data.inputTokens + data.cacheReadTokens)) * 100
-					: 0;
-			const cacheReadDisplay = `${formatNumber(data.cacheReadTokens)}${
-				cacheHitRate > 0 ? ` (${cacheHitRate.toFixed(0)}%)` : ''
-			}`;
+			const weekInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 
-			// Summary Row
+			// Summary Row (no $/M rates — mixed models)
 			table.push([
 				pc.bold(data.week),
 				pc.bold('Weekly Total'),
-				pc.bold(formatNumber(data.inputTokens)),
+				pc.bold(formatNumber(weekInput)),
 				pc.bold(formatNumber(data.outputTokens)),
-				pc.bold(formatNumber(data.cacheCreationTokens)),
-				pc.bold(cacheReadDisplay),
-				pc.bold(formatNumber(data.totalTokens)),
+				pc.bold(
+					formatAggregateCacheHit(data.inputTokens, data.cacheCreationTokens, data.cacheReadTokens),
+				),
 				pc.bold(formatCurrency(data.totalCost)),
 			]);
 
-			// Breakdown Rows
+			// Breakdown Rows (per-model, with $/M rates)
 			const sortedModels = Object.entries(data.modelBreakdown).sort(
 				(a, b) => b[1].totalCost - a[1].totalCost,
 			);
 
 			for (const [model, metrics] of sortedModels) {
-				const totalModelTokens =
-					metrics.inputTokens +
-					metrics.outputTokens +
-					metrics.cacheCreationTokens +
-					metrics.cacheReadTokens;
-
-				const modelHitRate =
-					metrics.inputTokens + metrics.cacheReadTokens > 0
-						? (metrics.cacheReadTokens / (metrics.inputTokens + metrics.cacheReadTokens)) * 100
-						: 0;
-				const modelCacheReadDisplay = `${formatNumber(metrics.cacheReadTokens)}${
-					modelHitRate > 0 ? ` (${modelHitRate.toFixed(0)}%)` : ''
-				}`;
+				const componentCosts: ComponentCosts = await calculateComponentCosts(
+					metrics,
+					model,
+					fetcher,
+				);
 
 				table.push([
 					'',
 					pc.dim(`- ${model}`),
-					pc.dim(formatNumber(metrics.inputTokens)),
-					pc.dim(formatNumber(metrics.outputTokens)),
-					pc.dim(formatNumber(metrics.cacheCreationTokens)),
-					pc.dim(modelCacheReadDisplay),
-					pc.dim(formatNumber(totalModelTokens)),
+					pc.dim(formatInputColumn(metrics, componentCosts)),
+					pc.dim(formatOutputColumn(metrics, componentCosts)),
+					pc.dim(formatCacheHitColumn(metrics, componentCosts)),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
 			}
@@ -260,22 +219,19 @@ export const weeklyCommand = define({
 			addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		}
 
-		const totalHitRate =
-			totals.inputTokens + totals.cacheReadTokens > 0
-				? (totals.cacheReadTokens / (totals.inputTokens + totals.cacheReadTokens)) * 100
-				: 0;
-		const totalCacheReadDisplay = `${formatNumber(totals.cacheReadTokens)}${
-			totalHitRate > 0 ? ` (${totalHitRate.toFixed(0)}%)` : ''
-		}`;
-
+		const totalInput = totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens;
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatNumber(totals.inputTokens)),
+			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(formatNumber(totals.outputTokens)),
-			pc.yellow(formatNumber(totals.cacheCreationTokens)),
-			pc.yellow(totalCacheReadDisplay),
-			pc.yellow(formatNumber(totals.totalTokens)),
+			pc.yellow(
+				formatAggregateCacheHit(
+					totals.inputTokens,
+					totals.cacheCreationTokens,
+					totals.cacheReadTokens,
+				),
+			),
 			pc.yellow(formatCurrency(totals.totalCost)),
 		]);
 
@@ -286,7 +242,7 @@ export const weeklyCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see cache metrics and total tokens');
+			console.log('Expand terminal width to see cache metrics');
 		}
 	},
 });
