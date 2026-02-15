@@ -1,4 +1,5 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
+import path from 'node:path';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import {
 	addEmptySeparatorRow,
@@ -38,6 +39,21 @@ function isValidDateArg(value: string): boolean {
 
 function toEntryDateKey(date: Date): string {
 	return date.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+function extractProjectName(directory: string, projectID: string): string {
+	if (directory !== 'unknown' && directory.trim() !== '') {
+		const base = path.basename(directory);
+		if (base !== '') {
+			return base;
+		}
+	}
+
+	if (projectID.trim() !== '') {
+		return projectID;
+	}
+
+	return 'unknown';
 }
 
 export const sessionCommand = define({
@@ -111,6 +127,7 @@ export const sessionCommand = define({
 		type SessionData = {
 			sessionID: string;
 			sessionTitle: string;
+			projectName: string;
 			parentID: string | null;
 			inputTokens: number;
 			outputTokens: number;
@@ -170,6 +187,10 @@ export const sessionCommand = define({
 			sessionData.push({
 				sessionID,
 				sessionTitle: metadata?.title ?? sessionID,
+				projectName: extractProjectName(
+					metadata?.directory ?? 'unknown',
+					metadata?.projectID ?? '',
+				),
 				parentID: metadata?.parentID ?? null,
 				inputTokens,
 				outputTokens,
@@ -229,6 +250,7 @@ export const sessionCommand = define({
 			const isParent = sessionsByParent[parentSession.sessionID] != null;
 			const parentTitle = truncateSessionTitle(parentSession.sessionTitle);
 			const displayTitle = isParent ? pc.bold(parentTitle) : parentTitle;
+			const parentSessionCell = `${displayTitle}\n${pc.dim(parentSession.projectName)}`;
 
 			const parentInput =
 				parentSession.inputTokens +
@@ -237,7 +259,7 @@ export const sessionCommand = define({
 
 			// Session summary row (no $/M — may have mixed models)
 			table.push([
-				displayTitle,
+				parentSessionCell,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
 				formatNumber(parentInput),
 				formatNumber(parentSession.outputTokens),
@@ -275,11 +297,12 @@ export const sessionCommand = define({
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);
+					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}`)}`;
 					const subInput =
 						subSession.inputTokens + subSession.cacheCreationTokens + subSession.cacheReadTokens;
 
 					table.push([
-						`  ↳ ${subTitle}`,
+						subSessionCell,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
 						formatNumber(subInput),
 						formatNumber(subSession.outputTokens),
