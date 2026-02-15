@@ -51,6 +51,7 @@ export type ComponentCosts = {
 	inputCost: number;
 	outputCost: number;
 	cacheReadCost: number;
+	inputListRatePerMillion: string;
 };
 
 /**
@@ -73,7 +74,7 @@ export async function calculateComponentCosts(
 	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
 
 	if (pricing == null) {
-		return { inputCost: 0, outputCost: 0, cacheReadCost: 0 };
+		return { inputCost: 0, outputCost: 0, cacheReadCost: 0, inputListRatePerMillion: '0' };
 	}
 
 	// Input cost: net input tokens + cache creation tokens (non-cached input)
@@ -105,7 +106,29 @@ export async function calculateComponentCosts(
 		pricing,
 	);
 
-	return { inputCost, outputCost, cacheReadCost };
+	const baseInputRate =
+		pricing.input_cost_per_token != null ? pricing.input_cost_per_token * MILLION : 0;
+	const tieredInputRate =
+		pricing.input_cost_per_token_above_200k_tokens != null
+			? pricing.input_cost_per_token_above_200k_tokens * MILLION
+			: null;
+
+	const formatListRate = (value: number): string => {
+		if (Number.isInteger(value)) {
+			return String(value);
+		}
+		return value
+			.toFixed(2)
+			.replace(/\.00$/, '')
+			.replace(/(\.\d)0$/, '$1');
+	};
+
+	const inputListRatePerMillion =
+		tieredInputRate != null && tieredInputRate !== baseInputRate
+			? `${formatListRate(baseInputRate)}-${formatListRate(tieredInputRate)}`
+			: formatListRate(baseInputRate);
+
+	return { inputCost, outputCost, cacheReadCost, inputListRatePerMillion };
 }
 
 // ── Display formatting helpers ──────────────────────────────────────
@@ -119,6 +142,16 @@ function formatRate(cost: number, tokens: number): string {
 	}
 	const perMillion = (cost / tokens) * MILLION;
 	return `$${perMillion.toFixed(2)}/M`;
+}
+
+function formatRateNumber(cost: number, tokens: number): string {
+	if (tokens <= 0) {
+		return '0';
+	}
+	return ((cost / tokens) * MILLION)
+		.toFixed(2)
+		.replace(/\.00$/, '')
+		.replace(/(\.\d)0$/, '$1');
 }
 
 /**
@@ -143,8 +176,12 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 		return formatNumber(totalInput);
 	}
 	const totalInputCost = componentCosts.inputCost + componentCosts.cacheReadCost;
-	const rate = formatRate(totalInputCost, totalInput);
-	return rate !== '' ? `${formatNumber(totalInput)} (${rate})` : formatNumber(totalInput);
+	const actualRate = formatRateNumber(totalInputCost, totalInput);
+	const listRate = componentCosts.inputListRatePerMillion;
+	if (!listRate.includes('-') && listRate === actualRate) {
+		return `${formatNumber(totalInput)} ($${actualRate}/M)`;
+	}
+	return `${formatNumber(totalInput)} ($${listRate}/M → $${actualRate}/M)`;
 }
 
 /**
