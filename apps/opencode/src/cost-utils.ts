@@ -179,9 +179,9 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 	const actualRate = formatRateNumber(totalInputCost, totalInput);
 	const listRate = componentCosts.inputListRatePerMillion;
 	if (!listRate.includes('-') && listRate === actualRate) {
-		return `${formatNumber(totalInput)} ($${actualRate}/M)`;
+		return `${formatNumber(totalInput)}\n$${actualRate}/M`;
 	}
-	return `${formatNumber(totalInput)} ($${listRate}/M → $${actualRate}/M)`;
+	return `${formatNumber(totalInput)}\n$${listRate}/M→$${actualRate}/M`;
 }
 
 /**
@@ -193,7 +193,7 @@ export function formatOutputColumn(data: ModelTokenData, componentCosts?: Compon
 	}
 	const rate = formatRate(componentCosts.outputCost, data.outputTokens);
 	return rate !== ''
-		? `${formatNumber(data.outputTokens)} (${rate})`
+		? `${formatNumber(data.outputTokens)}\n${rate}`
 		: formatNumber(data.outputTokens);
 }
 
@@ -204,10 +204,10 @@ export function formatOutputColumn(data: ModelTokenData, componentCosts?: Compon
 export function formatCacheColumn(data: ModelTokenData): string {
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	if (totalInput <= 0) {
-		return `${formatNumber(0)} (0%)`;
+		return `${formatNumber(0)}\n0%`;
 	}
-	const pct = ((data.cacheReadTokens / totalInput) * 100).toFixed(0);
-	return `${formatNumber(data.cacheReadTokens)} (${pct}%)`;
+	const pct = Number.parseFloat(((data.cacheReadTokens / totalInput) * 100).toFixed(0));
+	return `${formatNumber(data.cacheReadTokens)}\n${pct}%`;
 }
 
 /**
@@ -220,10 +220,10 @@ export function formatAggregateCacheColumn(
 ): string {
 	const totalInput = inputTokens + cacheCreationTokens + cacheReadTokens;
 	if (totalInput <= 0) {
-		return `${formatNumber(0)} (0%)`;
+		return `${formatNumber(0)}\n0%`;
 	}
-	const pct = ((cacheReadTokens / totalInput) * 100).toFixed(0);
-	return `${formatNumber(cacheReadTokens)} (${pct}%)`;
+	const pct = Number.parseFloat(((cacheReadTokens / totalInput) * 100).toFixed(0));
+	return `${formatNumber(cacheReadTokens)}\n${pct}%`;
 }
 
 /**

@@ -23,6 +23,14 @@ import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
+const MAX_SESSION_TITLE_CHARS = 40;
+
+function truncateSessionTitle(title: string): string {
+	if (title.length <= MAX_SESSION_TITLE_CHARS) {
+		return title;
+	}
+	return `${title.slice(0, MAX_SESSION_TITLE_CHARS - 3)}...`;
+}
 
 export const sessionCommand = define({
 	name: 'session',
@@ -178,9 +186,8 @@ export const sessionCommand = define({
 
 		for (const parentSession of parentSessions) {
 			const isParent = sessionsByParent[parentSession.sessionID] != null;
-			const displayTitle = isParent
-				? pc.bold(parentSession.sessionTitle)
-				: parentSession.sessionTitle;
+			const parentTitle = truncateSessionTitle(parentSession.sessionTitle);
+			const displayTitle = isParent ? pc.bold(parentTitle) : parentTitle;
 
 			const parentInput =
 				parentSession.inputTokens +
@@ -226,11 +233,12 @@ export const sessionCommand = define({
 			const subSessions = sessionsByParent[parentSession.sessionID];
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
+					const subTitle = truncateSessionTitle(subSession.sessionTitle);
 					const subInput =
 						subSession.inputTokens + subSession.cacheCreationTokens + subSession.cacheReadTokens;
 
 					table.push([
-						`  ↳ ${subSession.sessionTitle}`,
+						`  ↳ ${subTitle}`,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
 						formatNumber(subInput),
 						formatNumber(subSession.outputTokens),

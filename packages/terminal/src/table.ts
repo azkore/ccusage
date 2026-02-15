@@ -97,6 +97,10 @@ export class ResponsiveTable {
 	private forceCompact: boolean;
 	private logger: (message: string) => void;
 
+	private getCellWidth(cell: string): number {
+		return Math.max(...cell.split('\n').map((line) => stringWidth(line)));
+	}
+
 	/**
 	 * Creates a new responsive table instance
 	 * @param options - Table configuration options
@@ -212,7 +216,9 @@ export class ResponsiveTable {
 		];
 
 		const contentWidths = head.map((_, colIndex) => {
-			const maxLength = Math.max(...allRows.map((row) => stringWidth(String(row[colIndex] ?? ''))));
+			const maxLength = Math.max(
+				...allRows.map((row) => this.getCellWidth(String(row[colIndex] ?? ''))),
+			);
 			return maxLength;
 		});
 
@@ -221,17 +227,14 @@ export class ResponsiveTable {
 		const tableOverhead = 3 * numColumns + 1; // borders and separators
 		const availableWidth = terminalWidth - tableOverhead;
 
-		// Always use content-based widths with generous padding for numeric columns
+		// Use content-based widths; keep padding minimal so long columns don't bloat the table
 		const columnWidths = contentWidths.map((width, index) => {
 			const align = colAligns[index];
-			// For numeric columns, ensure generous width to prevent truncation
+			// Numeric columns need a bit more room for alignment and signs
 			if (align === 'right') {
-				return Math.max(width + 3, 11); // At least 11 chars for numbers, +3 padding
-			} else if (index === 1) {
-				// Models column - can be longer
-				return Math.max(width + 2, 15);
+				return Math.max(width + 2, 8);
 			}
-			return Math.max(width + 2, 10); // Other columns
+			return Math.max(width + 2, 6);
 		});
 
 		// Check if this fits in the terminal
@@ -246,13 +249,9 @@ export class ResponsiveTable {
 
 				// Apply minimum widths based on column type
 				if (align === 'right') {
-					adjustedWidth = Math.max(adjustedWidth, 10);
-				} else if (index === 0) {
-					adjustedWidth = Math.max(adjustedWidth, 10);
-				} else if (index === 1) {
-					adjustedWidth = Math.max(adjustedWidth, 12);
-				} else {
 					adjustedWidth = Math.max(adjustedWidth, 8);
+				} else {
+					adjustedWidth = Math.max(adjustedWidth, 6);
 				}
 
 				return adjustedWidth;
