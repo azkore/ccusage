@@ -1,106 +1,22 @@
 /**
- * @fileoverview Data loading utilities for OpenCode usage analysis
+ * @fileoverview Data loading utilities for OpenCode usage analysis.
  *
- * This module provides functions for loading and parsing OpenCode usage data
- * from JSON message files stored in OpenCode data directories.
- * OpenCode stores usage data in ~/.local/share/opencode/storage/message/
- *
- * @module data-loader
+ * OpenCode >= 1.2 stores session/message data in SQLite at:
+ * ~/.local/share/opencode/opencode.db
  */
 
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { DatabaseSync } from 'node:sqlite';
 import { isDirectorySync } from 'path-type';
-import { glob } from 'tinyglobby';
-import * as v from 'valibot';
+import { logger } from './logger.ts';
 
-/**
- * Default OpenCode data directory path (~/.local/share/opencode)
- */
 const DEFAULT_OPENCODE_PATH = '.local/share/opencode';
-
-/**
- * OpenCode storage subdirectory containing message data
- */
-const OPENCODE_STORAGE_DIR_NAME = 'storage';
-
-/**
- * OpenCode messages subdirectory within storage
- */
-const OPENCODE_MESSAGES_DIR_NAME = 'message';
-const OPENCODE_SESSIONS_DIR_NAME = 'session';
-
-/**
- * Environment variable for specifying custom OpenCode data directory
- */
 const OPENCODE_CONFIG_DIR_ENV = 'OPENCODE_DATA_DIR';
-
-/**
- * User home directory
- */
+const OPENCODE_DB_FILENAME = 'opencode.db';
 const USER_HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
 
-/**
- * Branded Valibot schema for model names
- */
-const modelNameSchema = v.pipe(
-	v.string(),
-	v.minLength(1, 'Model name cannot be empty'),
-	v.brand('ModelName'),
-);
-
-/**
- * Branded Valibot schema for session IDs
- */
-const sessionIdSchema = v.pipe(
-	v.string(),
-	v.minLength(1, 'Session ID cannot be empty'),
-	v.brand('SessionId'),
-);
-
-/**
- * OpenCode message token structure
- */
-export const openCodeTokensSchema = v.object({
-	input: v.optional(v.number()),
-	output: v.optional(v.number()),
-	reasoning: v.optional(v.number()),
-	cache: v.optional(
-		v.object({
-			read: v.optional(v.number()),
-			write: v.optional(v.number()),
-		}),
-	),
-});
-
-/**
- * OpenCode message data structure
- */
-export const openCodeMessageSchema = v.object({
-	id: v.string(),
-	sessionID: v.optional(sessionIdSchema),
-	providerID: v.optional(v.string()),
-	modelID: v.optional(modelNameSchema),
-	time: v.object({
-		created: v.optional(v.number()),
-		completed: v.optional(v.number()),
-	}),
-	tokens: v.optional(openCodeTokensSchema),
-	cost: v.optional(v.number()),
-});
-
-export const openCodeSessionSchema = v.object({
-	id: sessionIdSchema,
-	parentID: v.optional(v.nullable(sessionIdSchema)),
-	title: v.optional(v.string()),
-	projectID: v.optional(v.string()),
-	directory: v.optional(v.string()),
-});
-
-/**
- * Represents a single usage data entry loaded from OpenCode files
- */
 export type LoadedUsageEntry = {
 	timestamp: Date;
 	sessionID: string;
@@ -122,12 +38,26 @@ export type LoadedSessionMetadata = {
 	directory: string;
 };
 
-/**
- * Get OpenCode data directory
- * @returns Path to OpenCode data directory, or null if not found
- */
+type MessageRow = {
+	session_id: string;
+	modelID: string | null;
+	input: number | null;
+	output: number | null;
+	cache_read: number | null;
+	cache_write: number | null;
+	cost: number | null;
+	time_created: number | null;
+};
+
+type SessionRow = {
+	id: string;
+	parent_id: string | null;
+	title: string | null;
+	project_id: string | null;
+	directory: string | null;
+};
+
 export function getOpenCodePath(): string | null {
-	// Check environment variable first
 	const envPath = process.env[OPENCODE_CONFIG_DIR_ENV];
 	if (envPath != null && envPath.trim() !== '') {
 		const normalizedPath = path.resolve(envPath);
@@ -136,7 +66,6 @@ export function getOpenCodePath(): string | null {
 		}
 	}
 
-	// Use default path
 	const defaultPath = path.join(USER_HOME_DIR, DEFAULT_OPENCODE_PATH);
 	if (isDirectorySync(defaultPath)) {
 		return defaultPath;
@@ -145,225 +74,101 @@ export function getOpenCodePath(): string | null {
 	return null;
 }
 
-/**
- * Load OpenCode message from JSON file
- * @param filePath - Path to message JSON file
- * @returns Parsed message data or null on failure
- */
-async function loadOpenCodeMessage(
-	filePath: string,
-): Promise<v.InferOutput<typeof openCodeMessageSchema> | null> {
-	try {
-		const content = await readFile(filePath, 'utf-8');
-		const data: unknown = JSON.parse(content);
-		return v.parse(openCodeMessageSchema, data);
-	} catch {
+function getOpenCodeDbPath(): string | null {
+	const openCodePath = getOpenCodePath();
+	if (openCodePath == null) {
 		return null;
 	}
-}
 
-/**
- * Convert OpenCode message to LoadedUsageEntry
- * @param message - Parsed OpenCode message
- * @returns LoadedUsageEntry suitable for aggregation
- */
-function convertOpenCodeMessageToUsageEntry(
-	message: v.InferOutput<typeof openCodeMessageSchema>,
-): LoadedUsageEntry {
-	const createdMs = message.time.created ?? Date.now();
-
-	return {
-		timestamp: new Date(createdMs),
-		sessionID: message.sessionID ?? 'unknown',
-		usage: {
-			inputTokens: message.tokens?.input ?? 0,
-			outputTokens: message.tokens?.output ?? 0,
-			cacheCreationInputTokens: message.tokens?.cache?.write ?? 0,
-			cacheReadInputTokens: message.tokens?.cache?.read ?? 0,
-		},
-		model: message.modelID ?? 'unknown',
-		costUSD: message.cost ?? null,
-	};
-}
-
-async function loadOpenCodeSession(
-	filePath: string,
-): Promise<v.InferOutput<typeof openCodeSessionSchema> | null> {
-	try {
-		const content = await readFile(filePath, 'utf-8');
-		const data: unknown = JSON.parse(content);
-		return v.parse(openCodeSessionSchema, data);
-	} catch {
-		return null;
-	}
-}
-
-function convertOpenCodeSessionToMetadata(
-	session: v.InferOutput<typeof openCodeSessionSchema>,
-): LoadedSessionMetadata {
-	return {
-		id: session.id,
-		parentID: session.parentID ?? null,
-		title: session.title ?? session.id,
-		projectID: session.projectID ?? 'unknown',
-		directory: session.directory ?? 'unknown',
-	};
+	const dbPath = path.join(openCodePath, OPENCODE_DB_FILENAME);
+	return existsSync(dbPath) ? dbPath : null;
 }
 
 export async function loadOpenCodeSessions(): Promise<Map<string, LoadedSessionMetadata>> {
-	const openCodePath = getOpenCodePath();
-	if (openCodePath == null) {
+	const dbPath = getOpenCodeDbPath();
+	if (dbPath == null) {
 		return new Map();
 	}
 
-	const sessionsDir = path.join(
-		openCodePath,
-		OPENCODE_STORAGE_DIR_NAME,
-		OPENCODE_SESSIONS_DIR_NAME,
-	);
+	const db = new DatabaseSync(dbPath, { readOnly: true });
+	try {
+		const rows = db
+			.prepare('SELECT id, parent_id, title, project_id, directory FROM session')
+			.all() as SessionRow[];
+		const sessionMap = new Map<string, LoadedSessionMetadata>();
 
-	if (!isDirectorySync(sessionsDir)) {
-		return new Map();
-	}
-
-	const sessionFiles = await glob('**/*.json', {
-		cwd: sessionsDir,
-		absolute: true,
-	});
-
-	const sessionMap = new Map<string, LoadedSessionMetadata>();
-
-	for (const filePath of sessionFiles) {
-		const session = await loadOpenCodeSession(filePath);
-
-		if (session == null) {
-			continue;
+		for (const row of rows) {
+			sessionMap.set(row.id, {
+				id: row.id,
+				parentID: row.parent_id,
+				title: row.title != null && row.title !== '' ? row.title : row.id,
+				projectID: row.project_id != null && row.project_id !== '' ? row.project_id : 'unknown',
+				directory: row.directory != null && row.directory !== '' ? row.directory : 'unknown',
+			});
 		}
 
-		const metadata = convertOpenCodeSessionToMetadata(session);
-		sessionMap.set(metadata.id, metadata);
+		return sessionMap;
+	} catch (error) {
+		logger.warn('Failed to load sessions from OpenCode SQLite', error);
+		return new Map();
+	} finally {
+		db.close();
 	}
-
-	return sessionMap;
 }
 
-/**
- * Load all OpenCode messages
- * @returns Array of LoadedUsageEntry for aggregation
- */
 export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
-	const openCodePath = getOpenCodePath();
-	if (openCodePath == null) {
+	const dbPath = getOpenCodeDbPath();
+	if (dbPath == null) {
 		return [];
 	}
 
-	const messagesDir = path.join(
-		openCodePath,
-		OPENCODE_STORAGE_DIR_NAME,
-		OPENCODE_MESSAGES_DIR_NAME,
-	);
+	const db = new DatabaseSync(dbPath, { readOnly: true });
+	try {
+		const rows = db
+			.prepare(
+				`SELECT
+					session_id,
+					json_extract(data, '$.modelID') as modelID,
+					json_extract(data, '$.tokens.input') as input,
+					json_extract(data, '$.tokens.output') as output,
+					json_extract(data, '$.tokens.cache.read') as cache_read,
+					json_extract(data, '$.tokens.cache.write') as cache_write,
+					json_extract(data, '$.cost') as cost,
+					json_extract(data, '$.time.created') as time_created
+				FROM message
+				WHERE json_extract(data, '$.role') = 'assistant'
+					AND json_extract(data, '$.providerID') IS NOT NULL
+					AND json_extract(data, '$.modelID') IS NOT NULL`,
+			)
+			.all() as MessageRow[];
 
-	if (!isDirectorySync(messagesDir)) {
+		const entries: LoadedUsageEntry[] = [];
+		for (const row of rows) {
+			const inputTokens = row.input ?? 0;
+			const outputTokens = row.output ?? 0;
+			if (inputTokens === 0 && outputTokens === 0) {
+				continue;
+			}
+
+			entries.push({
+				timestamp: new Date(row.time_created ?? Date.now()),
+				sessionID: row.session_id,
+				usage: {
+					inputTokens,
+					outputTokens,
+					cacheCreationInputTokens: row.cache_write ?? 0,
+					cacheReadInputTokens: row.cache_read ?? 0,
+				},
+				model: row.modelID ?? 'unknown',
+				costUSD: row.cost,
+			});
+		}
+
+		return entries;
+	} catch (error) {
+		logger.warn('Failed to load messages from OpenCode SQLite', error);
 		return [];
+	} finally {
+		db.close();
 	}
-
-	// Find all message JSON files
-	const messageFiles = await glob('**/*.json', {
-		cwd: messagesDir,
-		absolute: true,
-	});
-
-	const entries: LoadedUsageEntry[] = [];
-	const dedupeSet = new Set<string>();
-
-	for (const filePath of messageFiles) {
-		const message = await loadOpenCodeMessage(filePath);
-
-		if (message == null) {
-			continue;
-		}
-
-		// Skip messages with no tokens
-		if (message.tokens == null || (message.tokens.input === 0 && message.tokens.output === 0)) {
-			continue;
-		}
-
-		// Skip if no provider or model
-		if (message.providerID == null || message.modelID == null) {
-			continue;
-		}
-
-		// Deduplicate by message ID
-		const dedupeKey = `${message.id}`;
-		if (dedupeSet.has(dedupeKey)) {
-			continue;
-		}
-		dedupeSet.add(dedupeKey);
-
-		const entry = convertOpenCodeMessageToUsageEntry(message);
-		entries.push(entry);
-	}
-
-	return entries;
-}
-
-if (import.meta.vitest != null) {
-	const { describe, it, expect } = import.meta.vitest;
-
-	describe('data-loader', () => {
-		it('should convert OpenCode message to LoadedUsageEntry', () => {
-			const message = {
-				id: 'msg_123',
-				sessionID: 'ses_456' as v.InferOutput<typeof sessionIdSchema>,
-				providerID: 'anthropic',
-				modelID: 'claude-sonnet-4-5' as v.InferOutput<typeof modelNameSchema>,
-				time: {
-					created: 1700000000000,
-					completed: 1700000010000,
-				},
-				tokens: {
-					input: 100,
-					output: 200,
-					reasoning: 0,
-					cache: {
-						read: 50,
-						write: 25,
-					},
-				},
-				cost: 0.001,
-			};
-
-			const entry = convertOpenCodeMessageToUsageEntry(message);
-
-			expect(entry.sessionID).toBe('ses_456');
-			expect(entry.usage.inputTokens).toBe(100);
-			expect(entry.usage.outputTokens).toBe(200);
-			expect(entry.usage.cacheReadInputTokens).toBe(50);
-			expect(entry.usage.cacheCreationInputTokens).toBe(25);
-			expect(entry.model).toBe('claude-sonnet-4-5');
-		});
-
-		it('should handle missing optional fields', () => {
-			const message = {
-				id: 'msg_123',
-				providerID: 'openai',
-				modelID: 'gpt-5.1' as v.InferOutput<typeof modelNameSchema>,
-				time: {
-					created: 1700000000000,
-				},
-				tokens: {
-					input: 50,
-					output: 100,
-				},
-			};
-
-			const entry = convertOpenCodeMessageToUsageEntry(message);
-
-			expect(entry.usage.inputTokens).toBe(50);
-			expect(entry.usage.outputTokens).toBe(100);
-			expect(entry.usage.cacheReadInputTokens).toBe(0);
-			expect(entry.usage.cacheCreationInputTokens).toBe(0);
-			expect(entry.costUSD).toBe(null);
-		});
-	});
 }
