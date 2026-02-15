@@ -223,9 +223,9 @@ export const sessionCommand = define({
 				table.push([
 					pc.dim(`  - ${model}`),
 					'',
-					pc.dim(formatInputColumn(metrics, componentCosts)),
-					pc.dim(formatOutputColumn(metrics, componentCosts)),
-					pc.dim(formatCacheColumn(metrics)),
+					formatInputColumn(metrics, componentCosts),
+					formatOutputColumn(metrics, componentCosts),
+					formatCacheColumn(metrics),
 					pc.dim(formatCurrency(metrics.totalCost)),
 				]);
 			}
@@ -265,9 +265,9 @@ export const sessionCommand = define({
 						table.push([
 							pc.dim(`    - ${model}`),
 							'',
-							pc.dim(formatInputColumn(metrics, componentCosts)),
-							pc.dim(formatOutputColumn(metrics, componentCosts)),
-							pc.dim(formatCacheColumn(metrics)),
+							formatInputColumn(metrics, componentCosts),
+							formatOutputColumn(metrics, componentCosts),
+							formatCacheColumn(metrics),
 							pc.dim(formatCurrency(metrics.totalCost)),
 						]);
 					}

@@ -2,6 +2,7 @@ import type { LiteLLMModelPricing, LiteLLMPricingFetcher } from '@ccusage/intern
 import type { LoadedUsageEntry } from './data-loader.ts';
 import { formatNumber } from '@ccusage/terminal/table';
 import { Result } from '@praha/byethrow';
+import pc from 'picocolors';
 
 /**
  * Model aliases for OpenCode-specific model names that don't exist in LiteLLM.
@@ -154,6 +155,38 @@ function formatRateNumber(cost: number, tokens: number): string {
 		.replace(/(\.\d)0$/, '$1');
 }
 
+function parseBaseListRatePerMillion(listRate: string): number {
+	const base = listRate.split('-')[0] ?? listRate;
+	return Number.parseFloat(base);
+}
+
+function colorizeEffectiveRate(actualRate: number, baseListRate: number, text: string): string {
+	if (!Number.isFinite(actualRate) || !Number.isFinite(baseListRate) || baseListRate <= 0) {
+		return text;
+	}
+
+	if (actualRate <= baseListRate * 0.8) {
+		return pc.green(pc.bold(text));
+	}
+	if (actualRate <= baseListRate) {
+		return pc.yellow(pc.bold(text));
+	}
+	return pc.red(pc.bold(text));
+}
+
+function colorizeCachePct(pct: number): string {
+	if (pct <= 0) {
+		return '0%';
+	}
+	if (pct >= 70) {
+		return pc.green(`${pct}%`);
+	}
+	if (pct >= 40) {
+		return pc.yellow(`${pct}%`);
+	}
+	return pc.red(`${pct}%`);
+}
+
 /**
  * Aggregated token data for a single model (used in breakdown rows)
  */
@@ -178,10 +211,17 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 	const totalInputCost = componentCosts.inputCost + componentCosts.cacheReadCost;
 	const actualRate = formatRateNumber(totalInputCost, totalInput);
 	const listRate = componentCosts.inputListRatePerMillion;
+	const actualRateValue = Number.parseFloat(actualRate);
+	const baseListRate = parseBaseListRatePerMillion(listRate);
+	const coloredActualRate = colorizeEffectiveRate(
+		actualRateValue,
+		baseListRate,
+		`$${actualRate}/M`,
+	);
 	if (!listRate.includes('-') && listRate === actualRate) {
 		return `${formatNumber(totalInput)}\n$${actualRate}/M`;
 	}
-	return `${formatNumber(totalInput)}\n$${listRate}/M→$${actualRate}/M`;
+	return `${formatNumber(totalInput)}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${coloredActualRate}`;
 }
 
 /**
@@ -193,7 +233,7 @@ export function formatOutputColumn(data: ModelTokenData, componentCosts?: Compon
 	}
 	const rate = formatRate(componentCosts.outputCost, data.outputTokens);
 	return rate !== ''
-		? `${formatNumber(data.outputTokens)}\n${rate}`
+		? `${formatNumber(data.outputTokens)}\n${pc.dim(rate)}`
 		: formatNumber(data.outputTokens);
 }
 
@@ -204,10 +244,10 @@ export function formatOutputColumn(data: ModelTokenData, componentCosts?: Compon
 export function formatCacheColumn(data: ModelTokenData): string {
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	if (totalInput <= 0) {
-		return `${formatNumber(0)}\n0%`;
+		return `${formatNumber(0)}\n${pc.dim('0%')}`;
 	}
 	const pct = Number.parseFloat(((data.cacheReadTokens / totalInput) * 100).toFixed(0));
-	return `${formatNumber(data.cacheReadTokens)}\n${pct}%`;
+	return `${formatNumber(data.cacheReadTokens)}\n${colorizeCachePct(pct)}`;
 }
 
 /**
@@ -220,10 +260,10 @@ export function formatAggregateCacheColumn(
 ): string {
 	const totalInput = inputTokens + cacheCreationTokens + cacheReadTokens;
 	if (totalInput <= 0) {
-		return `${formatNumber(0)}\n0%`;
+		return `${formatNumber(0)}\n${pc.dim('0%')}`;
 	}
 	const pct = Number.parseFloat(((cacheReadTokens / totalInput) * 100).toFixed(0));
-	return `${formatNumber(cacheReadTokens)}\n${pct}%`;
+	return `${formatNumber(cacheReadTokens)}\n${colorizeCachePct(pct)}`;
 }
 
 /**
