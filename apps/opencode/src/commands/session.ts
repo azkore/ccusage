@@ -32,10 +32,26 @@ function truncateSessionTitle(title: string): string {
 	return `${title.slice(0, MAX_SESSION_TITLE_CHARS - 3)}...`;
 }
 
+function isValidDateArg(value: string): boolean {
+	return /^\d{8}$/.test(value);
+}
+
+function toEntryDateKey(date: Date): string {
+	return date.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 export const sessionCommand = define({
 	name: 'session',
 	description: 'Show OpenCode token usage grouped by session',
 	args: {
+		since: {
+			type: 'string',
+			description: 'Filter from date (YYYYMMDD format)',
+		},
+		until: {
+			type: 'string',
+			description: 'Filter until date (YYYYMMDD format)',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -48,13 +64,38 @@ export const sessionCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const since = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
+		const until = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
+
+		if (since !== '' && !isValidDateArg(since)) {
+			throw new Error(`Invalid --since value: ${since}. Use YYYYMMDD.`);
+		}
+
+		if (until !== '' && !isValidDateArg(until)) {
+			throw new Error(`Invalid --until value: ${until}. Use YYYYMMDD.`);
+		}
+
+		if (since !== '' && until !== '' && since > until) {
+			throw new Error('--since must be earlier than or equal to --until');
+		}
 
 		const [entries, sessionMetadataMap] = await Promise.all([
 			loadOpenCodeMessages(),
 			loadOpenCodeSessions(),
 		]);
 
-		if (entries.length === 0) {
+		const filteredEntries = entries.filter((entry) => {
+			const dateKey = toEntryDateKey(entry.timestamp);
+			if (since !== '' && dateKey < since) {
+				return false;
+			}
+			if (until !== '' && dateKey > until) {
+				return false;
+			}
+			return true;
+		});
+
+		if (filteredEntries.length === 0) {
 			const output = jsonOutput
 				? JSON.stringify({ sessions: [], totals: null })
 				: 'No OpenCode usage data found.';
@@ -65,7 +106,7 @@ export const sessionCommand = define({
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
-		const entriesBySession = groupBy(entries, (entry) => entry.sessionID);
+		const entriesBySession = groupBy(filteredEntries, (entry) => entry.sessionID);
 
 		type SessionData = {
 			sessionID: string;

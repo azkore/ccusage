@@ -23,10 +23,26 @@ import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 5;
 
+function isValidDateArg(value: string): boolean {
+	return /^\d{8}$/.test(value);
+}
+
+function toEntryDateKey(date: Date): string {
+	return date.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 export const modelCommand = define({
 	name: 'model',
 	description: 'Show OpenCode token usage grouped by model',
 	args: {
+		since: {
+			type: 'string',
+			description: 'Filter from date (YYYYMMDD format)',
+		},
+		until: {
+			type: 'string',
+			description: 'Filter until date (YYYYMMDD format)',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -39,10 +55,34 @@ export const modelCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const since = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
+		const until = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
+
+		if (since !== '' && !isValidDateArg(since)) {
+			throw new Error(`Invalid --since value: ${since}. Use YYYYMMDD.`);
+		}
+
+		if (until !== '' && !isValidDateArg(until)) {
+			throw new Error(`Invalid --until value: ${until}. Use YYYYMMDD.`);
+		}
+
+		if (since !== '' && until !== '' && since > until) {
+			throw new Error('--since must be earlier than or equal to --until');
+		}
 
 		const entries = await loadOpenCodeMessages();
+		const filteredEntries = entries.filter((entry) => {
+			const dateKey = toEntryDateKey(entry.timestamp);
+			if (since !== '' && dateKey < since) {
+				return false;
+			}
+			if (until !== '' && dateKey > until) {
+				return false;
+			}
+			return true;
+		});
 
-		if (entries.length === 0) {
+		if (filteredEntries.length === 0) {
 			const output = jsonOutput
 				? JSON.stringify({ models: [], totals: null })
 				: 'No OpenCode usage data found.';
@@ -53,7 +93,7 @@ export const modelCommand = define({
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
-		const entriesByModel = groupBy(entries, (entry) => entry.model);
+		const entriesByModel = groupBy(filteredEntries, (entry) => entry.model);
 
 		const modelData: Array<
 			ModelTokenData & {
