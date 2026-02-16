@@ -23,6 +23,14 @@ import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
 
+function isValidDateArg(value: string): boolean {
+	return /^\d{8}$/.test(value);
+}
+
+function toEntryDateKey(date: Date): string {
+	return date.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
 /**
  * Get ISO week number for a date
  * ISO week starts on Monday, first week contains Jan 4th
@@ -52,6 +60,14 @@ export const weeklyCommand = define({
 	name: 'weekly',
 	description: 'Show OpenCode token usage grouped by week (ISO week format)',
 	args: {
+		since: {
+			type: 'string',
+			description: 'Filter from date (YYYYMMDD format)',
+		},
+		until: {
+			type: 'string',
+			description: 'Filter until date (YYYYMMDD format)',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -61,13 +77,42 @@ export const weeklyCommand = define({
 			type: 'boolean',
 			description: 'Force compact table mode',
 		},
+		full: {
+			type: 'boolean',
+			description: 'Show per-model breakdown rows',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const since = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
+		const until = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
+		const showBreakdown = ctx.values.full === true;
+
+		if (since !== '' && !isValidDateArg(since)) {
+			throw new Error(`Invalid --since value: ${since}. Use YYYYMMDD.`);
+		}
+
+		if (until !== '' && !isValidDateArg(until)) {
+			throw new Error(`Invalid --until value: ${until}. Use YYYYMMDD.`);
+		}
+
+		if (since !== '' && until !== '' && since > until) {
+			throw new Error('--since must be earlier than or equal to --until');
+		}
 
 		const entries = await loadOpenCodeMessages();
+		const filteredEntries = entries.filter((entry) => {
+			const dateKey = toEntryDateKey(entry.timestamp);
+			if (since !== '' && dateKey < since) {
+				return false;
+			}
+			if (until !== '' && dateKey > until) {
+				return false;
+			}
+			return true;
+		});
 
-		if (entries.length === 0) {
+		if (filteredEntries.length === 0) {
 			const output = jsonOutput
 				? JSON.stringify({ weekly: [], totals: null })
 				: 'No OpenCode usage data found.';
@@ -78,7 +123,7 @@ export const weeklyCommand = define({
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
-		const entriesByWeek = groupBy(entries, (entry) => getISOWeek(entry.timestamp));
+		const entriesByWeek = groupBy(filteredEntries, (entry) => getISOWeek(entry.timestamp));
 
 		const weeklyData: Array<{
 			week: string;
@@ -197,26 +242,28 @@ export const weeklyCommand = define({
 				pc.bold(formatCurrency(data.totalCost)),
 			]);
 
-			// Breakdown Rows (per-model, with $/M rates)
-			const sortedModels = Object.entries(data.modelBreakdown).sort(
-				(a, b) => b[1].totalCost - a[1].totalCost,
-			);
-
-			for (const [model, metrics] of sortedModels) {
-				const componentCosts: ComponentCosts = await calculateComponentCosts(
-					metrics,
-					model,
-					fetcher,
+			if (showBreakdown) {
+				// Breakdown Rows (per-model, with $/M rates)
+				const sortedModels = Object.entries(data.modelBreakdown).sort(
+					(a, b) => b[1].totalCost - a[1].totalCost,
 				);
 
-				table.push([
-					'',
-					pc.dim(`- ${model}`),
-					formatInputColumn(metrics, componentCosts),
-					formatOutputColumn(metrics, componentCosts),
-					formatCacheColumn(metrics),
-					pc.dim(formatCurrency(metrics.totalCost)),
-				]);
+				for (const [model, metrics] of sortedModels) {
+					const componentCosts: ComponentCosts = await calculateComponentCosts(
+						metrics,
+						model,
+						fetcher,
+					);
+
+					table.push([
+						'',
+						pc.dim(`- ${model}`),
+						formatInputColumn(metrics, componentCosts),
+						formatOutputColumn(metrics, componentCosts),
+						formatCacheColumn(metrics),
+						pc.dim(formatCurrency(metrics.totalCost)),
+					]);
+				}
 			}
 
 			// Add separator after each week
