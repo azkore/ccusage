@@ -19,7 +19,11 @@ import {
 	formatOutputColumn,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages } from '../data-loader.ts';
-import { DATE_FILTER_FORMAT_HINT, parseDateFilterValue } from '../date-filter.ts';
+import {
+	DATE_FILTER_FORMAT_HINT,
+	formatLocalMonthKey,
+	parseDateFilterValue,
+} from '../date-filter.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
@@ -93,7 +97,7 @@ export const monthlyCommand = define({
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
 		const entriesByMonth = groupBy(filteredEntries, (entry) =>
-			entry.timestamp.toISOString().slice(0, 7),
+			formatLocalMonthKey(entry.timestamp),
 		);
 
 		const monthlyData: Array<{

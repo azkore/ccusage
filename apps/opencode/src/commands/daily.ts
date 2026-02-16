@@ -19,7 +19,11 @@ import {
 	formatOutputColumn,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages } from '../data-loader.ts';
-import { DATE_FILTER_FORMAT_HINT, parseDateFilterValue } from '../date-filter.ts';
+import {
+	DATE_FILTER_FORMAT_HINT,
+	formatLocalDateKey,
+	parseDateFilterValue,
+} from '../date-filter.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
@@ -92,10 +96,7 @@ export const dailyCommand = define({
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
-		const entriesByDate = groupBy(
-			filteredEntries,
-			(entry) => entry.timestamp.toISOString().split('T')[0]!,
-		);
+		const entriesByDate = groupBy(filteredEntries, (entry) => formatLocalDateKey(entry.timestamp));
 
 		const dailyData: Array<{
 			date: string;
