@@ -21,7 +21,7 @@ import {
 	formatOutputColumn,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
-import { DATE_FILTER_FORMAT_HINT, parseDateFilterValue } from '../date-filter.ts';
+import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
@@ -61,6 +61,10 @@ export const sessionCommand = define({
 			type: 'string',
 			description: 'Filter until date/time',
 		},
+		last: {
+			type: 'string',
+			description: 'Filter to recent duration (e.g. 15m, 2h, 3d, 1w)',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -80,35 +84,19 @@ export const sessionCommand = define({
 		const showBreakdown = ctx.values.full === true;
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
-		const sinceDate = sinceInput !== '' ? parseDateFilterValue(sinceInput, 'since') : null;
-		const untilDate = untilInput !== '' ? parseDateFilterValue(untilInput, 'until') : null;
-
-		if (sinceInput !== '' && sinceDate == null) {
-			throw new Error(`Invalid --since value: ${sinceInput}. Use ${DATE_FILTER_FORMAT_HINT}.`);
-		}
-
-		if (untilInput !== '' && untilDate == null) {
-			throw new Error(`Invalid --until value: ${untilInput}. Use ${DATE_FILTER_FORMAT_HINT}.`);
-		}
-
-		if (sinceDate != null && untilDate != null && sinceDate.getTime() > untilDate.getTime()) {
-			throw new Error('--since must be earlier than or equal to --until');
-		}
+		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
+		const { sinceDate, untilDate } = resolveDateRangeFilters({
+			sinceInput,
+			untilInput,
+			lastInput,
+		});
 
 		const [entries, sessionMetadataMap] = await Promise.all([
 			loadOpenCodeMessages(),
 			loadOpenCodeSessions(),
 		]);
 
-		const filteredEntries = entries.filter((entry) => {
-			if (sinceDate != null && entry.timestamp < sinceDate) {
-				return false;
-			}
-			if (untilDate != null && entry.timestamp > untilDate) {
-				return false;
-			}
-			return true;
-		});
+		const filteredEntries = filterEntriesByDateRange(entries, sinceDate, untilDate);
 
 		if (filteredEntries.length === 0) {
 			const output = jsonOutput
