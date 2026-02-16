@@ -52,9 +52,14 @@ export const dailyCommand = define({
 			type: 'boolean',
 			description: 'Force compact table mode',
 		},
+		full: {
+			type: 'boolean',
+			description: 'Show per-model breakdown rows',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const showBreakdown = ctx.values.full === true;
 		const since = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const until = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 
@@ -215,26 +220,28 @@ export const dailyCommand = define({
 				pc.bold(formatCurrency(data.totalCost)),
 			]);
 
-			// Breakdown Rows (per-model, with $/M rates)
-			const sortedModels = Object.entries(data.modelBreakdown).sort(
-				(a, b) => b[1].totalCost - a[1].totalCost,
-			);
-
-			for (const [model, metrics] of sortedModels) {
-				const componentCosts: ComponentCosts = await calculateComponentCosts(
-					metrics,
-					model,
-					fetcher,
+			if (showBreakdown) {
+				// Breakdown Rows (per-model, with $/M rates)
+				const sortedModels = Object.entries(data.modelBreakdown).sort(
+					(a, b) => b[1].totalCost - a[1].totalCost,
 				);
 
-				table.push([
-					'',
-					pc.dim(`- ${model}`),
-					formatInputColumn(metrics, componentCosts),
-					formatOutputColumn(metrics, componentCosts),
-					formatCacheColumn(metrics),
-					pc.dim(formatCurrency(metrics.totalCost)),
-				]);
+				for (const [model, metrics] of sortedModels) {
+					const componentCosts: ComponentCosts = await calculateComponentCosts(
+						metrics,
+						model,
+						fetcher,
+					);
+
+					table.push([
+						'',
+						pc.dim(`- ${model}`),
+						formatInputColumn(metrics, componentCosts),
+						formatOutputColumn(metrics, componentCosts),
+						formatCacheColumn(metrics),
+						pc.dim(formatCurrency(metrics.totalCost)),
+					]);
+				}
 			}
 
 			// Add separator after each day
