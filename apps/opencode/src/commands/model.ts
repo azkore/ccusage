@@ -19,17 +19,10 @@ import {
 	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages } from '../data-loader.ts';
+import { DATE_FILTER_FORMAT_HINT, parseDateFilterValue } from '../date-filter.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 5;
-
-function isValidDateArg(value: string): boolean {
-	return /^\d{8}$/.test(value);
-}
-
-function toEntryDateKey(date: Date): string {
-	return date.toISOString().slice(0, 10).replace(/-/g, '');
-}
 
 export const modelCommand = define({
 	name: 'model',
@@ -37,11 +30,11 @@ export const modelCommand = define({
 	args: {
 		since: {
 			type: 'string',
-			description: 'Filter from date (YYYYMMDD format)',
+			description: 'Filter from date/time',
 		},
 		until: {
 			type: 'string',
-			description: 'Filter until date (YYYYMMDD format)',
+			description: 'Filter until date/time',
 		},
 		json: {
 			type: 'boolean',
@@ -55,28 +48,29 @@ export const modelCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
-		const since = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
-		const until = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
+		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
+		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
+		const sinceDate = sinceInput !== '' ? parseDateFilterValue(sinceInput, 'since') : null;
+		const untilDate = untilInput !== '' ? parseDateFilterValue(untilInput, 'until') : null;
 
-		if (since !== '' && !isValidDateArg(since)) {
-			throw new Error(`Invalid --since value: ${since}. Use YYYYMMDD.`);
+		if (sinceInput !== '' && sinceDate == null) {
+			throw new Error(`Invalid --since value: ${sinceInput}. Use ${DATE_FILTER_FORMAT_HINT}.`);
 		}
 
-		if (until !== '' && !isValidDateArg(until)) {
-			throw new Error(`Invalid --until value: ${until}. Use YYYYMMDD.`);
+		if (untilInput !== '' && untilDate == null) {
+			throw new Error(`Invalid --until value: ${untilInput}. Use ${DATE_FILTER_FORMAT_HINT}.`);
 		}
 
-		if (since !== '' && until !== '' && since > until) {
+		if (sinceDate != null && untilDate != null && sinceDate.getTime() > untilDate.getTime()) {
 			throw new Error('--since must be earlier than or equal to --until');
 		}
 
 		const entries = await loadOpenCodeMessages();
 		const filteredEntries = entries.filter((entry) => {
-			const dateKey = toEntryDateKey(entry.timestamp);
-			if (since !== '' && dateKey < since) {
+			if (sinceDate != null && entry.timestamp < sinceDate) {
 				return false;
 			}
-			if (until !== '' && dateKey > until) {
+			if (untilDate != null && entry.timestamp > untilDate) {
 				return false;
 			}
 			return true;
