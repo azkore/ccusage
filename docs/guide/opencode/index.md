@@ -42,16 +42,13 @@ alias ccusage-opencode 'bunx @ccusage/opencode@latest'
 
 ## Data Source
 
-The CLI reads OpenCode message and session JSON files located under `OPENCODE_DATA_DIR` (defaults to `~/.local/share/opencode`).
+The CLI reads OpenCode SQLite storage at:
 
-<!-- eslint-skip -->
+```txt
+~/.local/share/opencode/opencode.db
+```
 
-```
-~/.local/share/opencode/
-└── storage/
-    ├── message/{sessionID}/msg_{messageID}.json
-    └── session/{projectHash}/{sessionID}.json
-```
+Set `OPENCODE_DATA_DIR` to point to a different OpenCode data root.
 
 ## Available Commands
 
@@ -61,8 +58,22 @@ The CLI reads OpenCode message and session JSON files located under `OPENCODE_DA
 | `weekly`  | Aggregate usage by ISO week (YYYY-Www)               | [Weekly Reports](/guide/weekly-reports)   |
 | `monthly` | Aggregate usage by month (YYYY-MM)                   | [Monthly Reports](/guide/monthly-reports) |
 | `session` | Per-session breakdown with parent/subagent hierarchy | [Session Reports](/guide/session-reports) |
+| `model`   | Aggregate usage by model across filtered history     | —                                         |
 
-All commands support `--json` for structured output and `--compact` for narrow terminals. See the linked ccusage documentation for detailed flag descriptions.
+All commands support `--json` for structured output and `--compact` for narrow terminals.
+
+## Report Layout
+
+- Summary rows are shown by default.
+- Per-model breakdown rows are hidden by default.
+- Use `--full` to include per-model breakdown rows.
+
+### Token and Cost Columns
+
+- **Input** shows total input-side tokens (`input + cache create + cache read`).
+- **Output** shows output tokens.
+- **Cache** shows cache-read tokens and cache ratio.
+- In per-model rows (`--full`), input/output can include effective `$ / M` rates.
 
 ## Session Hierarchy
 
@@ -71,6 +82,49 @@ OpenCode supports subagent sessions. The session report displays:
 - **Bold titles** for parent sessions with subagents
 - **Indented rows** (`↳`) for subagent sessions
 - **Subtotal rows** combining parent + subagents
+- **Project/directory label** on the second line under each session title
+
+## Date & Time Filters
+
+All report commands support:
+
+- `--since <value>`
+- `--until <value>`
+- `--last <duration>`
+
+Supported absolute formats for `--since/--until`:
+
+- `YYYYMMDD` (example: `20260216`)
+- `YYYYMMDDHHMM` (example: `202602161530`)
+- `YYYY-MM-DD`
+- `YYYY-MM-DD HH:MM`
+- `YYYY-MM-DDTHH:MM`
+- ISO datetime strings
+
+Supported duration formats for `--last`:
+
+- `15m`, `2h`, `3d`, `1w`
+
+Notes:
+
+- `--last` cannot be combined with `--since` or `--until`.
+- Filters follow local-time boundaries by default.
+
+### Examples
+
+```bash
+# Last 24 hours
+ccusage-opencode daily --last 24h
+
+# Local day range
+ccusage-opencode session --since 20260216 --until 20260218
+
+# Precise local time window
+ccusage-opencode model --since 202602161200 --until 202602161800
+
+# Include per-model breakdown rows
+ccusage-opencode daily --last 3d --full
+```
 
 ## Environment Variables
 
@@ -86,7 +140,7 @@ OpenCode stores `cost: 0` in message files. Costs are calculated from token coun
 ## Troubleshooting
 
 ::: details No OpenCode usage data found
-Ensure the data directory exists at `~/.local/share/opencode/storage/message/`. Set `OPENCODE_DATA_DIR` for custom paths.
+Ensure the data directory contains `opencode.db` under `~/.local/share/opencode/`. Set `OPENCODE_DATA_DIR` for custom paths.
 :::
 
 ::: details Costs showing as $0.00
