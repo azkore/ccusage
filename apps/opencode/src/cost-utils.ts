@@ -35,7 +35,7 @@ export async function calculateCostForEntry(
 	const result = await fetcher.calculateCostFromTokens(
 		{
 			input_tokens: entry.usage.inputTokens,
-			output_tokens: entry.usage.outputTokens,
+			output_tokens: entry.usage.outputTokens + entry.usage.reasoningTokens,
 			cache_creation_input_tokens: entry.usage.cacheCreationInputTokens,
 			cache_read_input_tokens: entry.usage.cacheReadInputTokens,
 		},
@@ -53,6 +53,8 @@ export type ComponentCosts = {
 	outputCost: number;
 	cacheReadCost: number;
 	inputListRatePerMillion: string;
+	outputListRatePerMillion: string;
+	cacheReadRatePerMillion: string;
 };
 
 /**
@@ -64,6 +66,7 @@ export async function calculateComponentCosts(
 	tokens: {
 		inputTokens: number;
 		outputTokens: number;
+		reasoningTokens: number;
 		cacheCreationTokens: number;
 		cacheReadTokens: number;
 	},
@@ -75,7 +78,14 @@ export async function calculateComponentCosts(
 	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
 
 	if (pricing == null) {
-		return { inputCost: 0, outputCost: 0, cacheReadCost: 0, inputListRatePerMillion: '0' };
+		return {
+			inputCost: 0,
+			outputCost: 0,
+			cacheReadCost: 0,
+			inputListRatePerMillion: '0',
+			outputListRatePerMillion: '0',
+			cacheReadRatePerMillion: '0',
+		};
 	}
 
 	// Input cost: net input tokens + cache creation tokens (non-cached input)
@@ -92,7 +102,7 @@ export async function calculateComponentCosts(
 	const outputCost = fetcher.calculateCostFromPricing(
 		{
 			input_tokens: 0,
-			output_tokens: tokens.outputTokens,
+			output_tokens: tokens.outputTokens + tokens.reasoningTokens,
 		},
 		pricing,
 	);
@@ -124,12 +134,49 @@ export async function calculateComponentCosts(
 			.replace(/(\.\d)0$/, '$1');
 	};
 
+	const resolveRateRange = (base: number | null, tiered: number | null): string => {
+		if (base == null) {
+			return '0';
+		}
+
+		if (tiered != null && tiered !== base) {
+			return `${formatListRate(base)}-${formatListRate(tiered)}`;
+		}
+
+		return formatListRate(base);
+	};
+
+	const outputBaseRate =
+		pricing.output_cost_per_token != null ? pricing.output_cost_per_token * MILLION : null;
+	const outputTieredRate =
+		pricing.output_cost_per_token_above_200k_tokens != null
+			? pricing.output_cost_per_token_above_200k_tokens * MILLION
+			: null;
+
+	const cacheReadBaseRate =
+		pricing.cache_read_input_token_cost != null
+			? pricing.cache_read_input_token_cost * MILLION
+			: null;
+	const cacheReadTieredRate =
+		pricing.cache_read_input_token_cost_above_200k_tokens != null
+			? pricing.cache_read_input_token_cost_above_200k_tokens * MILLION
+			: null;
+
 	const inputListRatePerMillion =
 		tieredInputRate != null && tieredInputRate !== baseInputRate
 			? `${formatListRate(baseInputRate)}-${formatListRate(tieredInputRate)}`
 			: formatListRate(baseInputRate);
+	const outputListRatePerMillion = resolveRateRange(outputBaseRate, outputTieredRate);
+	const cacheReadRatePerMillion = resolveRateRange(cacheReadBaseRate, cacheReadTieredRate);
 
-	return { inputCost, outputCost, cacheReadCost, inputListRatePerMillion };
+	return {
+		inputCost,
+		outputCost,
+		cacheReadCost,
+		inputListRatePerMillion,
+		outputListRatePerMillion,
+		cacheReadRatePerMillion,
+	};
 }
 
 // ── Display formatting helpers ──────────────────────────────────────
@@ -193,6 +240,7 @@ function colorizeCachePct(pct: number): string {
 export type ModelTokenData = {
 	inputTokens: number;
 	outputTokens: number;
+	reasoningTokens: number;
 	cacheCreationTokens: number;
 	cacheReadTokens: number;
 	totalCost: number;
@@ -219,35 +267,54 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 		`$${actualRate}/M`,
 	);
 	if (!listRate.includes('-') && listRate === actualRate) {
-		return `${formatNumber(totalInput)}\n$${actualRate}/M`;
+		return `${formatNumber(totalInput)}\n$${actualRate}/M→${formatCurrency(totalInputCost)}`;
 	}
-	return `${formatNumber(totalInput)}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${coloredActualRate}`;
+	return `${formatNumber(totalInput)}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${coloredActualRate}${pc.dim('→')}${formatCurrency(totalInputCost)}`;
 }
 
 /**
  * Format the "Output" column value: output tokens with $/M rate.
  */
 export function formatOutputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
+	const outputTokenDisplay =
+		data.reasoningTokens > 0
+			? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
+			: formatNumber(data.outputTokens);
+
 	if (componentCosts == null) {
-		return formatNumber(data.outputTokens);
+		return outputTokenDisplay;
 	}
-	const rate = formatRate(componentCosts.outputCost, data.outputTokens);
-	return rate !== ''
-		? `${formatNumber(data.outputTokens)}\n${pc.dim(rate)}`
-		: formatNumber(data.outputTokens);
+
+	const outputTotalTokens = data.outputTokens + data.reasoningTokens;
+	const rate = formatRate(componentCosts.outputCost, outputTotalTokens);
+	if (rate === '') {
+		return outputTokenDisplay;
+	}
+
+	const actualRate = formatRateNumber(componentCosts.outputCost, outputTotalTokens);
+	const listRate = componentCosts.outputListRatePerMillion;
+	if (!listRate.includes('-') && listRate === actualRate) {
+		return `${outputTokenDisplay}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${formatCurrency(componentCosts.outputCost)}`;
+	}
+
+	return `${outputTokenDisplay}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${pc.dim(rate)}${pc.dim('→')}${formatCurrency(componentCosts.outputCost)}`;
 }
 
 /**
  * Format the "Cache" column value: absolute cache read tokens with hit %.
  * Cache hit % = cacheRead / (input + cacheCreate + cacheRead)
  */
-export function formatCacheColumn(data: ModelTokenData): string {
+export function formatCacheColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	if (totalInput <= 0) {
 		return `${formatNumber(0)}\n${pc.dim('0%')}`;
 	}
 	const pct = Number.parseFloat(((data.cacheReadTokens / totalInput) * 100).toFixed(0));
-	return `${formatNumber(data.cacheReadTokens)}\n${colorizeCachePct(pct)}`;
+	if (componentCosts == null) {
+		return `${formatNumber(data.cacheReadTokens)}\n${colorizeCachePct(pct)}`;
+	}
+
+	return `${formatNumber(data.cacheReadTokens)}\n${pc.dim(`$${componentCosts.cacheReadRatePerMillion}/M`)}${pc.dim('→')}${formatCurrency(componentCosts.cacheReadCost)} ${pc.dim('|')} ${colorizeCachePct(pct)}`;
 }
 
 /**
@@ -271,4 +338,8 @@ export function formatAggregateCacheColumn(
  */
 export function totalInputTokens(data: ModelTokenData): number {
 	return data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+}
+
+function formatCurrency(value: number): string {
+	return `$${value.toFixed(2)}`;
 }
