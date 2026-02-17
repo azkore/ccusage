@@ -279,11 +279,11 @@ function formatRateRange(rates: number[]): string {
 
 function formatPercent(numerator: number, denominator: number): string {
 	if (denominator <= 0) {
-		return '0%';
+		return pc.magenta('0%');
 	}
 
 	const pct = Math.round((numerator / denominator) * 100);
-	return `${pct}%`;
+	return pc.magenta(`${pct}%`);
 }
 
 function formatCurrencyValue(value: number): string {
