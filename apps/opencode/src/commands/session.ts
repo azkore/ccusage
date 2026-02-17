@@ -276,7 +276,7 @@ export const sessionCommand = define({
 			const isParent = sessionsByParent[parentSession.sessionID] != null;
 			const parentTitle = truncateSessionTitle(parentSession.sessionTitle);
 			const displayTitle = isParent ? pc.bold(parentTitle) : parentTitle;
-			const parentSessionCell = `${displayTitle}\n${pc.dim(parentSession.projectName)}`;
+			const parentSessionCell = `${displayTitle}\n${pc.dim(`${parentSession.projectName}/${parentSession.sessionID}`)}`;
 
 			const parentInput = totalInputTokens(parentSession);
 			const parentOutputDisplay = formatOutputValueWithReasoningPct(
@@ -333,7 +333,7 @@ export const sessionCommand = define({
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);
-					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}`)}`;
+					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}/${subSession.sessionID}`)}`;
 					const subInput = totalInputTokens(subSession);
 					const subOutputDisplay = formatOutputValueWithReasoningPct(
 						subSession.outputTokens,
