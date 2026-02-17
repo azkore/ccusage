@@ -6,9 +6,9 @@
  */
 
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
-import { DatabaseSync } from 'node:sqlite';
 import { isDirectorySync } from 'path-type';
 import { logger } from './logger.ts';
 
@@ -16,6 +16,58 @@ const DEFAULT_OPENCODE_PATH = '.local/share/opencode';
 const OPENCODE_CONFIG_DIR_ENV = 'OPENCODE_DATA_DIR';
 const OPENCODE_DB_FILENAME = 'opencode.db';
 const USER_HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
+const require = createRequire(import.meta.url);
+
+let databaseSyncCtor:
+	| (new (
+			path: string,
+			options: { readOnly: boolean },
+	  ) => {
+			prepare: (sql: string) => { all: () => unknown[] };
+			close: () => void;
+	  })
+	| null = null;
+let sqliteWarningSuppressed = false;
+
+function ensureSQLiteWarningSuppressed(): void {
+	if (sqliteWarningSuppressed) {
+		return;
+	}
+
+	const originalEmitWarning = process.emitWarning.bind(process);
+	process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
+		if (typeof warning === 'string') {
+			if (warning.includes('SQLite is an experimental feature')) {
+				return;
+			}
+		} else if (warning.name === 'ExperimentalWarning' && warning.message.includes('SQLite')) {
+			return;
+		}
+
+		return (originalEmitWarning as (...args: unknown[]) => void)(warning, ...args);
+	}) as typeof process.emitWarning;
+
+	sqliteWarningSuppressed = true;
+}
+
+function getDatabaseSyncCtor() {
+	if (databaseSyncCtor != null) {
+		return databaseSyncCtor;
+	}
+
+	ensureSQLiteWarningSuppressed();
+	const sqlite = require('node:sqlite') as {
+		DatabaseSync: new (
+			path: string,
+			options: { readOnly: boolean },
+		) => {
+			prepare: (sql: string) => { all: () => unknown[] };
+			close: () => void;
+		};
+	};
+	databaseSyncCtor = sqlite.DatabaseSync;
+	return databaseSyncCtor;
+}
 
 export type LoadedUsageEntry = {
 	timestamp: Date;
@@ -90,6 +142,7 @@ export async function loadOpenCodeSessions(): Promise<Map<string, LoadedSessionM
 		return new Map();
 	}
 
+	const DatabaseSync = getDatabaseSyncCtor();
 	const db = new DatabaseSync(dbPath, { readOnly: true });
 	try {
 		const rows = db
@@ -122,6 +175,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 		return [];
 	}
 
+	const DatabaseSync = getDatabaseSyncCtor();
 	const db = new DatabaseSync(dbPath, { readOnly: true });
 	try {
 		const rows = db

@@ -152,7 +152,7 @@ export class LiteLLMPricingFetcher implements Disposable {
 					return this.loadOfflinePricing();
 				}
 
-				this.logger.warn('Fetching latest model pricing from LiteLLM...');
+				this.logger.debug('Fetching latest model pricing from LiteLLM...');
 				return Result.pipe(
 					Result.try({
 						try: fetch(this.url),
@@ -189,7 +189,7 @@ export class LiteLLMPricingFetcher implements Disposable {
 					}),
 					Result.inspect((pricing) => {
 						this.cachedPricing = pricing;
-						this.logger.info(`Loaded pricing for ${pricing.size} models`);
+						this.logger.debug(`Loaded pricing for ${pricing.size} models`);
 					}),
 					Result.orElse(async (error) => this.handleFallbackToCachedPricing(error)),
 				);
