@@ -18,12 +18,13 @@ import {
 	formatInputColumn,
 	formatOutputColumn,
 } from '../cost-utils.ts';
-import { loadOpenCodeMessages } from '../data-loader.ts';
+import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import {
 	filterEntriesByDateRange,
 	formatLocalMonthKey,
 	resolveDateRangeFilters,
 } from '../date-filter.ts';
+import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
@@ -32,6 +33,16 @@ export const monthlyCommand = define({
 	name: 'monthly',
 	description: 'Show OpenCode token usage grouped by month',
 	args: {
+		id: {
+			type: 'string',
+			short: 'i',
+			description: 'Filter to a specific session ID',
+		},
+		project: {
+			type: 'string',
+			short: 'p',
+			description: 'Filter sessions by project name/path',
+		},
 		since: {
 			type: 'string',
 			description: 'Filter from date/time',
@@ -60,6 +71,8 @@ export const monthlyCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
+		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const showBreakdown = ctx.values.full === true;
@@ -70,8 +83,19 @@ export const monthlyCommand = define({
 			lastInput,
 		});
 
-		const entries = await loadOpenCodeMessages();
-		const filteredEntries = filterEntriesByDateRange(entries, sinceDate, untilDate);
+		const [entries, sessionMetadataMap] = await Promise.all([
+			loadOpenCodeMessages(),
+			loadOpenCodeSessions(),
+		]);
+		const timeFilteredEntries = filterEntriesByDateRange(entries, sinceDate, untilDate);
+		const filteredEntries = filterEntriesBySessionProjectFilters(
+			timeFilteredEntries,
+			sessionMetadataMap,
+			{
+				idInput,
+				projectInput,
+			},
+		);
 
 		if (filteredEntries.length === 0) {
 			const output = jsonOutput
