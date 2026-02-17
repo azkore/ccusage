@@ -84,6 +84,13 @@ OpenCode supports subagent sessions. The session report displays:
 - **Subtotal rows** combining parent + subagents
 - **Project/directory label** on the second line under each session title
 
+### Scope filters
+
+All report commands support:
+
+- `--id, -i <sessionID>`: include only entries from one session
+- `--project, -p <name>`: filter by project name/path
+
 ## Date & Time Filters
 
 All report commands support:
@@ -118,6 +125,12 @@ ccusage-opencode daily --last 24h
 
 # Local day range
 ccusage-opencode session --since 20260216 --until 20260218
+
+# One specific session
+ccusage-opencode session --id ses_abc123
+
+# Filter by project name/path
+ccusage-opencode session --project my-repo
 
 # Precise local time window
 ccusage-opencode model --since 202602161200 --until 202602161800
