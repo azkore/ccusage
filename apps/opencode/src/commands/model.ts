@@ -10,12 +10,15 @@ import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
-	calculateComponentCosts,
+	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
-	formatAggregateCacheColumn,
-	formatCacheColumn,
+	formatAggregateCachedInputColumn,
+	formatAggregateUncachedInputColumn,
+	formatCachedInputColumn,
 	formatInputColumn,
 	formatOutputColumn,
+	formatOutputValueWithReasoningPct,
+	formatUncachedInputColumn,
 	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
@@ -23,7 +26,7 @@ import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filte
 import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 5;
+const TABLE_COLUMN_COUNT = 6;
 
 export const modelCommand = define({
 	name: 'model',
@@ -126,11 +129,7 @@ export const modelCommand = define({
 				totalCost += cost;
 			}
 
-			const componentCosts = await calculateComponentCosts(
-				{ inputTokens, outputTokens, reasoningTokens, cacheCreationTokens, cacheReadTokens },
-				model,
-				fetcher,
-			);
+			const componentCosts = await calculateComponentCostsFromEntries(modelEntries, model, fetcher);
 
 			modelData.push({
 				model,
@@ -155,8 +154,6 @@ export const modelCommand = define({
 			cacheReadTokens: modelData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
 			totalCost: modelData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
-		const hasReasoningTokens = totals.reasoningTokens > 0;
-
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
 			console.log(
@@ -191,18 +188,14 @@ export const modelCommand = define({
 		const table: ResponsiveTable = new ResponsiveTable({
 			head: [
 				'Model',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cache',
+				'Input Uncached',
+				'Input Cached',
+				'Input Total',
+				'Output/Reasoning%',
 				'Cost (USD)',
 			],
-			colAligns: ['left', 'right', 'right', 'right', 'right'],
-			compactHead: [
-				'Model',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cost (USD)',
-			],
+			colAligns: ['left', 'right', 'right', 'right', 'right', 'right'],
+			compactHead: ['Model', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'right', 'right', 'right'],
 			compactThreshold: 80,
 			forceCompact: Boolean(ctx.values.compact),
@@ -212,32 +205,36 @@ export const modelCommand = define({
 		for (const data of modelData) {
 			table.push([
 				pc.bold(data.model),
+				formatUncachedInputColumn(data, data.componentCosts),
+				formatCachedInputColumn(data, data.componentCosts),
 				formatInputColumn(data, data.componentCosts),
 				formatOutputColumn(data, data.componentCosts),
-				formatCacheColumn(data),
-				formatCurrency(data.totalCost),
+				pc.green(formatCurrency(data.totalCost)),
 			]);
 		}
 
 		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 
-		const totalInput = totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens;
+		const totalInput = totalInputTokens(totals);
 		table.push([
 			pc.yellow('Total'),
-			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(
-				hasReasoningTokens
-					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
-					: formatNumber(totals.outputTokens),
-			),
-			pc.yellow(
-				formatAggregateCacheColumn(
+				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatCurrency(totals.totalCost)),
+			pc.yellow(
+				formatAggregateCachedInputColumn(
+					totals.inputTokens,
+					totals.cacheCreationTokens,
+					totals.cacheReadTokens,
+				),
+			),
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
+			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
 		// eslint-disable-next-line no-console
@@ -247,7 +244,7 @@ export const modelCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see cache metrics');
+			console.log('Expand terminal width to see uncached/cached input columns');
 		}
 	},
 });

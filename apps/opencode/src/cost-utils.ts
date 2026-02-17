@@ -49,16 +49,20 @@ export async function calculateCostForEntry(
  * Component-level cost breakdown for a model's aggregated tokens
  */
 export type ComponentCosts = {
-	inputCost: number;
+	uncachedInputCost: number;
 	outputCost: number;
 	cacheReadCost: number;
-	inputListRatePerMillion: string;
+	uncachedInputListRatePerMillion: string;
+	cacheReadListRatePerMillion: string;
 };
+
+type ComponentRateInfo = Pick<
+	ComponentCosts,
+	'uncachedInputListRatePerMillion' | 'cacheReadListRatePerMillion'
+>;
 
 /**
  * Calculate per-component costs using the model's actual pricing.
- * Computes input cost (net input + cache creation), output cost,
- * and cache read cost separately using LiteLLM pricing data.
  */
 export async function calculateComponentCosts(
 	tokens: {
@@ -76,11 +80,18 @@ export async function calculateComponentCosts(
 	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
 
 	if (pricing == null) {
-		return { inputCost: 0, outputCost: 0, cacheReadCost: 0, inputListRatePerMillion: '0' };
+		return {
+			uncachedInputCost: 0,
+			outputCost: 0,
+			cacheReadCost: 0,
+			uncachedInputListRatePerMillion: '0',
+			cacheReadListRatePerMillion: '0',
+		};
 	}
 
-	// Input cost: net input tokens + cache creation tokens (non-cached input)
-	const inputCost = fetcher.calculateCostFromPricing(
+	const rateInfo = getComponentRateInfo(pricing);
+
+	const uncachedInputCost = fetcher.calculateCostFromPricing(
 		{
 			input_tokens: tokens.inputTokens,
 			output_tokens: 0,
@@ -89,7 +100,6 @@ export async function calculateComponentCosts(
 		pricing,
 	);
 
-	// Output cost only
 	const outputCost = fetcher.calculateCostFromPricing(
 		{
 			input_tokens: 0,
@@ -98,7 +108,6 @@ export async function calculateComponentCosts(
 		pricing,
 	);
 
-	// Cache read cost only
 	const cacheReadCost = fetcher.calculateCostFromPricing(
 		{
 			input_tokens: 0,
@@ -108,42 +117,130 @@ export async function calculateComponentCosts(
 		pricing,
 	);
 
-	const baseInputRate =
-		pricing.input_cost_per_token != null ? pricing.input_cost_per_token * MILLION : 0;
-	const tieredInputRate =
+	return {
+		uncachedInputCost,
+		outputCost,
+		cacheReadCost,
+		...rateInfo,
+	};
+}
+
+/**
+ * Calculate per-component costs by summing per-entry component costs.
+ * This preserves per-request tier behavior and then scales each entry's
+ * component split to match authoritative entry.costUSD when available.
+ */
+export async function calculateComponentCostsFromEntries(
+	entries: LoadedUsageEntry[],
+	modelName: string,
+	fetcher: LiteLLMPricingFetcher,
+): Promise<ComponentCosts> {
+	const resolvedModel = resolveModelName(modelName);
+	const pricingResult = await fetcher.getModelPricing(resolvedModel);
+	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
+
+	if (pricing == null) {
+		return {
+			uncachedInputCost: 0,
+			outputCost: 0,
+			cacheReadCost: 0,
+			uncachedInputListRatePerMillion: '0',
+			cacheReadListRatePerMillion: '0',
+		};
+	}
+
+	const rateInfo = getComponentRateInfo(pricing);
+
+	let uncachedInputCost = 0;
+	let outputCost = 0;
+	let cacheReadCost = 0;
+
+	for (const entry of entries) {
+		const entryUncachedCost = fetcher.calculateCostFromPricing(
+			{
+				input_tokens: entry.usage.inputTokens,
+				output_tokens: 0,
+				cache_creation_input_tokens: entry.usage.cacheCreationInputTokens,
+			},
+			pricing,
+		);
+		const entryOutputCost = fetcher.calculateCostFromPricing(
+			{
+				input_tokens: 0,
+				output_tokens: entry.usage.outputTokens + entry.usage.reasoningTokens,
+			},
+			pricing,
+		);
+		const entryCacheReadCost = fetcher.calculateCostFromPricing(
+			{
+				input_tokens: 0,
+				output_tokens: 0,
+				cache_read_input_tokens: entry.usage.cacheReadInputTokens,
+			},
+			pricing,
+		);
+
+		const calculatedTotal = entryUncachedCost + entryOutputCost + entryCacheReadCost;
+		const authoritativeTotal = entry.costUSD != null && entry.costUSD > 0 ? entry.costUSD : null;
+
+		if (authoritativeTotal != null && calculatedTotal > 0) {
+			const scale = authoritativeTotal / calculatedTotal;
+			uncachedInputCost += entryUncachedCost * scale;
+			outputCost += entryOutputCost * scale;
+			cacheReadCost += entryCacheReadCost * scale;
+			continue;
+		}
+
+		uncachedInputCost += entryUncachedCost;
+		outputCost += entryOutputCost;
+		cacheReadCost += entryCacheReadCost;
+	}
+
+	return {
+		uncachedInputCost,
+		outputCost,
+		cacheReadCost,
+		...rateInfo,
+	};
+}
+
+function getComponentRateInfo(pricing: LiteLLMModelPricing): ComponentRateInfo {
+	const inputBaseRate =
+		pricing.input_cost_per_token != null ? pricing.input_cost_per_token * MILLION : null;
+	const inputTieredRate =
 		pricing.input_cost_per_token_above_200k_tokens != null
 			? pricing.input_cost_per_token_above_200k_tokens * MILLION
 			: null;
+	const cacheCreateBaseRate =
+		pricing.cache_creation_input_token_cost != null
+			? pricing.cache_creation_input_token_cost * MILLION
+			: null;
+	const cacheCreateTieredRate =
+		pricing.cache_creation_input_token_cost_above_200k_tokens != null
+			? pricing.cache_creation_input_token_cost_above_200k_tokens * MILLION
+			: null;
+	const cacheReadBaseRate =
+		pricing.cache_read_input_token_cost != null
+			? pricing.cache_read_input_token_cost * MILLION
+			: null;
+	const cacheReadTieredRate =
+		pricing.cache_read_input_token_cost_above_200k_tokens != null
+			? pricing.cache_read_input_token_cost_above_200k_tokens * MILLION
+			: null;
 
-	const formatListRate = (value: number): string => {
-		if (Number.isInteger(value)) {
-			return String(value);
-		}
-		return value
-			.toFixed(2)
-			.replace(/\.00$/, '')
-			.replace(/(\.\d)0$/, '$1');
+	const uncachedInputListRatePerMillion = formatRateRange(
+		[inputBaseRate, inputTieredRate, cacheCreateBaseRate, cacheCreateTieredRate].filter(
+			(rate): rate is number => rate != null,
+		),
+	);
+	const cacheReadListRatePerMillion = formatRateRange(
+		[cacheReadBaseRate, cacheReadTieredRate].filter((rate): rate is number => rate != null),
+	);
+
+	return {
+		uncachedInputListRatePerMillion,
+		cacheReadListRatePerMillion,
 	};
-
-	const inputListRatePerMillion =
-		tieredInputRate != null && tieredInputRate !== baseInputRate
-			? `${formatListRate(baseInputRate)}-${formatListRate(tieredInputRate)}`
-			: formatListRate(baseInputRate);
-
-	return { inputCost, outputCost, cacheReadCost, inputListRatePerMillion };
-}
-
-// ── Display formatting helpers ──────────────────────────────────────
-
-/**
- * Format effective blended rate as $/M
- */
-function formatRate(cost: number, tokens: number): string {
-	if (tokens <= 0) {
-		return '';
-	}
-	const perMillion = (cost / tokens) * MILLION;
-	return `$${perMillion.toFixed(2)}/M`;
 }
 
 function formatRateNumber(cost: number, tokens: number): string {
@@ -156,36 +253,41 @@ function formatRateNumber(cost: number, tokens: number): string {
 		.replace(/(\.\d)0$/, '$1');
 }
 
-function parseBaseListRatePerMillion(listRate: string): number {
-	const base = listRate.split('-')[0] ?? listRate;
-	return Number.parseFloat(base);
+function formatListRate(value: number): string {
+	if (Number.isInteger(value)) {
+		return String(value);
+	}
+	return value
+		.toFixed(2)
+		.replace(/\.00$/, '')
+		.replace(/(\.\d)0$/, '$1');
 }
 
-function colorizeEffectiveRate(actualRate: number, baseListRate: number, text: string): string {
-	if (!Number.isFinite(actualRate) || !Number.isFinite(baseListRate) || baseListRate <= 0) {
-		return text;
+function formatRateRange(rates: number[]): string {
+	if (rates.length === 0) {
+		return '0';
 	}
 
-	if (actualRate <= baseListRate * 0.8) {
-		return pc.green(pc.bold(text));
+	const minRate = Math.min(...rates);
+	const maxRate = Math.max(...rates);
+	if (minRate === maxRate) {
+		return formatListRate(minRate);
 	}
-	if (actualRate <= baseListRate) {
-		return pc.yellow(pc.bold(text));
-	}
-	return pc.red(pc.bold(text));
+
+	return `${formatListRate(minRate)}-${formatListRate(maxRate)}`;
 }
 
-function colorizeCachePct(pct: number): string {
-	if (pct <= 0) {
+function formatPercent(numerator: number, denominator: number): string {
+	if (denominator <= 0) {
 		return '0%';
 	}
-	if (pct >= 70) {
-		return pc.green(`${pct}%`);
-	}
-	if (pct >= 40) {
-		return pc.yellow(`${pct}%`);
-	}
-	return pc.red(`${pct}%`);
+
+	const pct = Math.round((numerator / denominator) * 100);
+	return `${pct}%`;
+}
+
+function formatCurrencyValue(value: number): string {
+	return `$${value.toFixed(2)}`;
 }
 
 /**
@@ -200,82 +302,116 @@ export type ModelTokenData = {
 	totalCost: number;
 };
 
-/**
- * Format the "Input" column value: total input-side tokens with effective $/M rate.
- * Rate = total input-side cost (net input + cache creation + cache read) / total input tokens.
- * This shows the actual price paid per input token after caching discount.
- */
+export function uncachedInputTokens(data: {
+	inputTokens: number;
+	cacheCreationTokens: number;
+}): number {
+	return data.inputTokens + data.cacheCreationTokens;
+}
+
+export function totalInputTokens(data: {
+	inputTokens: number;
+	cacheCreationTokens: number;
+	cacheReadTokens: number;
+}): number {
+	return data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+}
+
+/** Input Uncached: value + listed rate/cost/percent (or value+percent for mixed summary). */
+export function formatUncachedInputColumn(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+): string {
+	const uncachedInput = uncachedInputTokens(data);
+	const totalInput = totalInputTokens(data);
+	const uncachedPct = formatPercent(uncachedInput, totalInput);
+
+	if (componentCosts == null) {
+		return `${formatNumber(uncachedInput)}\n${uncachedPct}`;
+	}
+
+	return `${formatNumber(uncachedInput)}\n$${componentCosts.uncachedInputListRatePerMillion}/M→${pc.green(formatCurrencyValue(componentCosts.uncachedInputCost))} ${uncachedPct}`;
+}
+
+/** Input Cached: value + listed rate/cost/percent (or value+percent for mixed summary). */
+export function formatCachedInputColumn(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+): string {
+	const totalInput = totalInputTokens(data);
+	const cachedPct = formatPercent(data.cacheReadTokens, totalInput);
+
+	if (componentCosts == null) {
+		return `${formatNumber(data.cacheReadTokens)}\n${cachedPct}`;
+	}
+
+	return `${formatNumber(data.cacheReadTokens)}\n$${componentCosts.cacheReadListRatePerMillion}/M→${pc.green(formatCurrencyValue(componentCosts.cacheReadCost))} ${cachedPct}`;
+}
+
+/** Input Total: value + real effective rate/cost. */
 export function formatInputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
-	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+	const totalInput = totalInputTokens(data);
+
 	if (componentCosts == null) {
 		return formatNumber(totalInput);
 	}
-	const totalInputCost = componentCosts.inputCost + componentCosts.cacheReadCost;
-	const actualRate = formatRateNumber(totalInputCost, totalInput);
-	const listRate = componentCosts.inputListRatePerMillion;
-	const actualRateValue = Number.parseFloat(actualRate);
-	const baseListRate = parseBaseListRatePerMillion(listRate);
-	const coloredActualRate = colorizeEffectiveRate(
-		actualRateValue,
-		baseListRate,
-		`$${actualRate}/M`,
-	);
-	if (!listRate.includes('-') && listRate === actualRate) {
-		return `${formatNumber(totalInput)}\n$${actualRate}/M`;
-	}
-	return `${formatNumber(totalInput)}\n${pc.dim(`$${listRate}/M`)}${pc.dim('→')}${coloredActualRate}`;
+
+	const totalInputCost = componentCosts.uncachedInputCost + componentCosts.cacheReadCost;
+	const realRate = formatRateNumber(totalInputCost, totalInput);
+	return `${formatNumber(totalInput)}\n$${realRate}/M→${pc.green(formatCurrencyValue(totalInputCost))}`;
 }
 
-/**
- * Format the "Output" column value: output tokens with $/M rate.
- */
+/** Output/Reasoning: value + real effective rate/cost. */
 export function formatOutputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
-	const outputTokenDisplay =
-		data.reasoningTokens > 0
-			? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
-			: formatNumber(data.outputTokens);
+	const outputTokenDisplay = formatOutputValueWithReasoningPct(
+		data.outputTokens,
+		data.reasoningTokens,
+	);
 
 	if (componentCosts == null) {
 		return outputTokenDisplay;
 	}
 
 	const outputTotalTokens = data.outputTokens + data.reasoningTokens;
-	const rate = formatRate(componentCosts.outputCost, outputTotalTokens);
-	return rate !== '' ? `${outputTokenDisplay}\n${pc.dim(rate)}` : outputTokenDisplay;
-}
-
-/**
- * Format the "Cache" column value: absolute cache read tokens with hit %.
- * Cache hit % = cacheRead / (input + cacheCreate + cacheRead)
- */
-export function formatCacheColumn(data: ModelTokenData): string {
-	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
-	if (totalInput <= 0) {
-		return `${formatNumber(0)}\n${pc.dim('0%')}`;
+	if (outputTotalTokens <= 0) {
+		return outputTokenDisplay;
 	}
-	const pct = Number.parseFloat(((data.cacheReadTokens / totalInput) * 100).toFixed(0));
-	return `${formatNumber(data.cacheReadTokens)}\n${colorizeCachePct(pct)}`;
+
+	const realRate = formatRateNumber(componentCosts.outputCost, outputTotalTokens);
+	return `${outputTokenDisplay}\n$${realRate}/M→${pc.green(formatCurrencyValue(componentCosts.outputCost))}`;
 }
 
-/**
- * Compute cache column for an aggregate of multiple models.
- */
-export function formatAggregateCacheColumn(
+export function formatOutputValueWithReasoningPct(
+	outputTokens: number,
+	reasoningTokens: number,
+): string {
+	if (reasoningTokens <= 0) {
+		return formatNumber(outputTokens);
+	}
+
+	const reasoningPct = formatPercent(reasoningTokens, outputTokens + reasoningTokens);
+	return `${formatNumber(outputTokens)} ${reasoningPct}r`;
+}
+
+/** Aggregate (mixed-model) Input Cached column: value + percent only. */
+export function formatAggregateCachedInputColumn(
 	inputTokens: number,
 	cacheCreationTokens: number,
 	cacheReadTokens: number,
 ): string {
 	const totalInput = inputTokens + cacheCreationTokens + cacheReadTokens;
-	if (totalInput <= 0) {
-		return `${formatNumber(0)}\n${pc.dim('0%')}`;
-	}
-	const pct = Number.parseFloat(((cacheReadTokens / totalInput) * 100).toFixed(0));
-	return `${formatNumber(cacheReadTokens)}\n${colorizeCachePct(pct)}`;
+	const cachedPct = formatPercent(cacheReadTokens, totalInput);
+	return `${formatNumber(cacheReadTokens)}\n${cachedPct}`;
 }
 
-/**
- * Compute total input tokens (net input + cache create + cache read)
- */
-export function totalInputTokens(data: ModelTokenData): number {
-	return data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+/** Aggregate (mixed-model) Input Uncached column: value + percent only. */
+export function formatAggregateUncachedInputColumn(
+	inputTokens: number,
+	cacheCreationTokens: number,
+	cacheReadTokens: number,
+): string {
+	const uncachedInput = inputTokens + cacheCreationTokens;
+	const totalInput = uncachedInput + cacheReadTokens;
+	const uncachedPct = formatPercent(uncachedInput, totalInput);
+	return `${formatNumber(uncachedInput)}\n${uncachedPct}`;
 }

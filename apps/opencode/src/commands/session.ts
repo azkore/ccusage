@@ -1,4 +1,5 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
+import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import {
 	addEmptySeparatorRow,
@@ -12,19 +13,23 @@ import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
-	calculateComponentCosts,
+	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
-	formatAggregateCacheColumn,
-	formatCacheColumn,
+	formatAggregateCachedInputColumn,
+	formatAggregateUncachedInputColumn,
+	formatCachedInputColumn,
 	formatInputColumn,
 	formatOutputColumn,
+	formatOutputValueWithReasoningPct,
+	formatUncachedInputColumn,
+	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 6;
+const TABLE_COLUMN_COUNT = 7;
 const MAX_SESSION_TITLE_CHARS = 40;
 
 function truncateSessionTitle(title: string): string {
@@ -133,6 +138,7 @@ export const sessionCommand = define({
 		};
 
 		const sessionData: SessionData[] = [];
+		const breakdownEntriesBySession: Record<string, Record<string, LoadedUsageEntry[]>> = {};
 
 		for (const [sessionID, sessionEntries] of Object.entries(entriesBySession)) {
 			let inputTokens = 0;
@@ -144,6 +150,7 @@ export const sessionCommand = define({
 			const modelsSet = new Set<string>();
 			let lastActivity = sessionEntries[0]!.timestamp;
 			const modelBreakdown: Record<string, ModelTokenData> = {};
+			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
 
 			for (const entry of sessionEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
@@ -177,6 +184,13 @@ export const sessionCommand = define({
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
+
+				let modelEntries = modelEntriesByModel[entry.model];
+				if (modelEntries == null) {
+					modelEntries = [];
+					modelEntriesByModel[entry.model] = modelEntries;
+				}
+				modelEntries.push(entry);
 			}
 
 			const metadata = sessionMetadataMap.get(sessionID);
@@ -199,6 +213,7 @@ export const sessionCommand = define({
 				lastActivity,
 				modelBreakdown,
 			});
+			breakdownEntriesBySession[sessionID] = modelEntriesByModel;
 		}
 
 		sessionData.sort((a, b) => a.lastActivity.getTime() - b.lastActivity.getTime());
@@ -211,8 +226,6 @@ export const sessionCommand = define({
 			cacheReadTokens: sessionData.reduce((sum, s) => sum + s.cacheReadTokens, 0),
 			totalCost: sessionData.reduce((sum, s) => sum + s.totalCost, 0),
 		};
-		const hasReasoningTokens = totals.reasoningTokens > 0;
-
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
 			console.log(
@@ -235,19 +248,14 @@ export const sessionCommand = define({
 			head: [
 				'Session',
 				'Models',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cache',
+				'Input Uncached',
+				'Input Cached',
+				'Input Total',
+				'Output/Reasoning%',
 				'Cost (USD)',
 			],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
-			compactHead: [
-				'Session',
-				'Models',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cost (USD)',
-			],
+			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right'],
+			compactHead: ['Session', 'Models', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -265,26 +273,29 @@ export const sessionCommand = define({
 			const displayTitle = isParent ? pc.bold(parentTitle) : parentTitle;
 			const parentSessionCell = `${displayTitle}\n${pc.dim(parentSession.projectName)}`;
 
-			const parentInput =
-				parentSession.inputTokens +
-				parentSession.cacheCreationTokens +
-				parentSession.cacheReadTokens;
-			const parentOutputDisplay = hasReasoningTokens
-				? `${formatNumber(parentSession.outputTokens)} / ${formatNumber(parentSession.reasoningTokens)}`
-				: formatNumber(parentSession.outputTokens);
+			const parentInput = totalInputTokens(parentSession);
+			const parentOutputDisplay = formatOutputValueWithReasoningPct(
+				parentSession.outputTokens,
+				parentSession.reasoningTokens,
+			);
 
 			// Session summary row (no $/M — may have mixed models)
 			table.push([
 				parentSessionCell,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
-				formatNumber(parentInput),
-				parentOutputDisplay,
-				formatAggregateCacheColumn(
+				formatAggregateUncachedInputColumn(
 					parentSession.inputTokens,
 					parentSession.cacheCreationTokens,
 					parentSession.cacheReadTokens,
 				),
-				formatCurrency(parentSession.totalCost),
+				formatAggregateCachedInputColumn(
+					parentSession.inputTokens,
+					parentSession.cacheCreationTokens,
+					parentSession.cacheReadTokens,
+				),
+				formatNumber(parentInput),
+				parentOutputDisplay,
+				pc.green(formatCurrency(parentSession.totalCost)),
 			]);
 
 			if (showBreakdown) {
@@ -294,19 +305,21 @@ export const sessionCommand = define({
 				);
 
 				for (const [model, metrics] of sortedParentModels) {
-					const componentCosts: ComponentCosts = await calculateComponentCosts(
-						metrics,
+					const modelEntries = breakdownEntriesBySession[parentSession.sessionID]?.[model] ?? [];
+					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+						modelEntries,
 						model,
 						fetcher,
 					);
 
 					table.push([
-						pc.dim(`  - ${model}`),
+						`  - ${model}`,
 						'',
+						formatUncachedInputColumn(metrics, componentCosts),
+						formatCachedInputColumn(metrics, componentCosts),
 						formatInputColumn(metrics, componentCosts),
 						formatOutputColumn(metrics, componentCosts),
-						formatCacheColumn(metrics),
-						pc.dim(formatCurrency(metrics.totalCost)),
+						pc.green(formatCurrency(metrics.totalCost)),
 					]);
 				}
 			}
@@ -316,23 +329,28 @@ export const sessionCommand = define({
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);
 					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}`)}`;
-					const subInput =
-						subSession.inputTokens + subSession.cacheCreationTokens + subSession.cacheReadTokens;
-					const subOutputDisplay = hasReasoningTokens
-						? `${formatNumber(subSession.outputTokens)} / ${formatNumber(subSession.reasoningTokens)}`
-						: formatNumber(subSession.outputTokens);
+					const subInput = totalInputTokens(subSession);
+					const subOutputDisplay = formatOutputValueWithReasoningPct(
+						subSession.outputTokens,
+						subSession.reasoningTokens,
+					);
 
 					table.push([
 						subSessionCell,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
-						formatNumber(subInput),
-						subOutputDisplay,
-						formatAggregateCacheColumn(
+						formatAggregateUncachedInputColumn(
 							subSession.inputTokens,
 							subSession.cacheCreationTokens,
 							subSession.cacheReadTokens,
 						),
-						formatCurrency(subSession.totalCost),
+						formatAggregateCachedInputColumn(
+							subSession.inputTokens,
+							subSession.cacheCreationTokens,
+							subSession.cacheReadTokens,
+						),
+						formatNumber(subInput),
+						subOutputDisplay,
+						pc.green(formatCurrency(subSession.totalCost)),
 					]);
 
 					if (showBreakdown) {
@@ -342,19 +360,21 @@ export const sessionCommand = define({
 						);
 
 						for (const [model, metrics] of sortedSubModels) {
-							const componentCosts: ComponentCosts = await calculateComponentCosts(
-								metrics,
+							const modelEntries = breakdownEntriesBySession[subSession.sessionID]?.[model] ?? [];
+							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+								modelEntries,
 								model,
 								fetcher,
 							);
 
 							table.push([
-								pc.dim(`    - ${model}`),
+								`    - ${model}`,
 								'',
+								formatUncachedInputColumn(metrics, componentCosts),
+								formatCachedInputColumn(metrics, componentCosts),
 								formatInputColumn(metrics, componentCosts),
 								formatOutputColumn(metrics, componentCosts),
-								formatCacheColumn(metrics),
-								pc.dim(formatCurrency(metrics.totalCost)),
+								pc.green(formatCurrency(metrics.totalCost)),
 							]);
 						}
 					}
@@ -376,50 +396,58 @@ export const sessionCommand = define({
 				const subtotalCost =
 					parentSession.totalCost + subSessions.reduce((sum, s) => sum + s.totalCost, 0);
 
-				const subtotalInput =
-					subtotalInputTokens + subtotalCacheCreationTokens + subtotalCacheReadTokens;
+				const subtotalUncachedInput = subtotalInputTokens + subtotalCacheCreationTokens;
+				const subtotalInput = subtotalUncachedInput + subtotalCacheReadTokens;
 
 				table.push([
 					pc.dim('  Total (with subagents)'),
 					'',
-					pc.yellow(formatNumber(subtotalInput)),
 					pc.yellow(
-						hasReasoningTokens
-							? `${formatNumber(subtotalOutputTokens)} / ${formatNumber(subtotalReasoningTokens)}`
-							: formatNumber(subtotalOutputTokens),
-					),
-					pc.yellow(
-						formatAggregateCacheColumn(
+						formatAggregateUncachedInputColumn(
 							subtotalInputTokens,
 							subtotalCacheCreationTokens,
 							subtotalCacheReadTokens,
 						),
 					),
-					pc.yellow(formatCurrency(subtotalCost)),
+					pc.yellow(
+						formatAggregateCachedInputColumn(
+							subtotalInputTokens,
+							subtotalCacheCreationTokens,
+							subtotalCacheReadTokens,
+						),
+					),
+					pc.yellow(formatNumber(subtotalInput)),
+					pc.yellow(
+						formatOutputValueWithReasoningPct(subtotalOutputTokens, subtotalReasoningTokens),
+					),
+					pc.yellow(pc.green(formatCurrency(subtotalCost))),
 				]);
 			}
 		}
 
-		const totalInput = totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens;
+		const totalInput = totalInputTokens(totals);
 
 		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(
-				hasReasoningTokens
-					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
-					: formatNumber(totals.outputTokens),
-			),
-			pc.yellow(
-				formatAggregateCacheColumn(
+				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatCurrency(totals.totalCost)),
+			pc.yellow(
+				formatAggregateCachedInputColumn(
+					totals.inputTokens,
+					totals.cacheCreationTokens,
+					totals.cacheReadTokens,
+				),
+			),
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
+			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
 		// eslint-disable-next-line no-console
@@ -429,7 +457,7 @@ export const sessionCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see cache metrics');
+			console.log('Expand terminal width to see uncached/cached input columns');
 		}
 	},
 });

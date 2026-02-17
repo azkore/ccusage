@@ -1,4 +1,5 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
+import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import {
 	addEmptySeparatorRow,
@@ -11,19 +12,23 @@ import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
-	calculateComponentCosts,
+	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
-	formatAggregateCacheColumn,
-	formatCacheColumn,
+	formatAggregateCachedInputColumn,
+	formatAggregateUncachedInputColumn,
+	formatCachedInputColumn,
 	formatInputColumn,
 	formatOutputColumn,
+	formatOutputValueWithReasoningPct,
+	formatUncachedInputColumn,
+	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 
-const TABLE_COLUMN_COUNT = 6;
+const TABLE_COLUMN_COUNT = 7;
 
 /**
  * Get ISO week number for a date
@@ -142,6 +147,7 @@ export const weeklyCommand = define({
 			modelsUsed: string[];
 			modelBreakdown: Record<string, ModelTokenData>;
 		}> = [];
+		const breakdownEntriesByWeek: Record<string, Record<string, LoadedUsageEntry[]>> = {};
 
 		for (const [week, weekEntries] of Object.entries(entriesByWeek)) {
 			let inputTokens = 0;
@@ -152,6 +158,7 @@ export const weeklyCommand = define({
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
 			const modelBreakdown: Record<string, ModelTokenData> = {};
+			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
 
 			for (const entry of weekEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
@@ -181,6 +188,13 @@ export const weeklyCommand = define({
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
+
+				let modelEntries = modelEntriesByModel[entry.model];
+				if (modelEntries == null) {
+					modelEntries = [];
+					modelEntriesByModel[entry.model] = modelEntries;
+				}
+				modelEntries.push(entry);
 			}
 
 			weeklyData.push({
@@ -194,6 +208,7 @@ export const weeklyCommand = define({
 				modelsUsed: Array.from(modelsSet),
 				modelBreakdown,
 			});
+			breakdownEntriesByWeek[week] = modelEntriesByModel;
 		}
 
 		weeklyData.sort((a, b) => a.week.localeCompare(b.week));
@@ -206,8 +221,6 @@ export const weeklyCommand = define({
 			cacheReadTokens: weeklyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
 			totalCost: weeklyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
-		const hasReasoningTokens = totals.reasoningTokens > 0;
-
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
 			console.log(
@@ -230,19 +243,14 @@ export const weeklyCommand = define({
 			head: [
 				'Week',
 				'Models',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cache',
+				'Input Uncached',
+				'Input Cached',
+				'Input Total',
+				'Output/Reasoning%',
 				'Cost (USD)',
 			],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
-			compactHead: [
-				'Week',
-				'Models',
-				'Input',
-				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
-				'Cost (USD)',
-			],
+			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right'],
+			compactHead: ['Week', 'Models', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -251,26 +259,29 @@ export const weeklyCommand = define({
 		});
 
 		for (const data of weeklyData) {
-			const weekInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+			const weekInput = totalInputTokens(data);
 
 			// Summary Row (no $/M rates — mixed models)
 			table.push([
 				pc.bold(data.week),
 				pc.bold('Weekly Total'),
-				pc.bold(formatNumber(weekInput)),
 				pc.bold(
-					hasReasoningTokens
-						? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
-						: formatNumber(data.outputTokens),
-				),
-				pc.bold(
-					formatAggregateCacheColumn(
+					formatAggregateUncachedInputColumn(
 						data.inputTokens,
 						data.cacheCreationTokens,
 						data.cacheReadTokens,
 					),
 				),
-				pc.bold(formatCurrency(data.totalCost)),
+				pc.bold(
+					formatAggregateCachedInputColumn(
+						data.inputTokens,
+						data.cacheCreationTokens,
+						data.cacheReadTokens,
+					),
+				),
+				pc.bold(formatNumber(weekInput)),
+				pc.bold(formatOutputValueWithReasoningPct(data.outputTokens, data.reasoningTokens)),
+				pc.bold(pc.green(formatCurrency(data.totalCost))),
 			]);
 
 			if (showBreakdown) {
@@ -280,19 +291,21 @@ export const weeklyCommand = define({
 				);
 
 				for (const [model, metrics] of sortedModels) {
-					const componentCosts: ComponentCosts = await calculateComponentCosts(
-						metrics,
+					const modelEntries = breakdownEntriesByWeek[data.week]?.[model] ?? [];
+					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+						modelEntries,
 						model,
 						fetcher,
 					);
 
 					table.push([
 						'',
-						pc.dim(`- ${model}`),
+						`- ${model}`,
+						formatUncachedInputColumn(metrics, componentCosts),
+						formatCachedInputColumn(metrics, componentCosts),
 						formatInputColumn(metrics, componentCosts),
 						formatOutputColumn(metrics, componentCosts),
-						formatCacheColumn(metrics),
-						pc.dim(formatCurrency(metrics.totalCost)),
+						pc.green(formatCurrency(metrics.totalCost)),
 					]);
 				}
 			}
@@ -301,24 +314,27 @@ export const weeklyCommand = define({
 			addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
 		}
 
-		const totalInput = totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens;
+		const totalInput = totalInputTokens(totals);
 		table.push([
 			pc.yellow('Total'),
 			'',
-			pc.yellow(formatNumber(totalInput)),
 			pc.yellow(
-				hasReasoningTokens
-					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
-					: formatNumber(totals.outputTokens),
-			),
-			pc.yellow(
-				formatAggregateCacheColumn(
+				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
 					totals.cacheCreationTokens,
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatCurrency(totals.totalCost)),
+			pc.yellow(
+				formatAggregateCachedInputColumn(
+					totals.inputTokens,
+					totals.cacheCreationTokens,
+					totals.cacheReadTokens,
+				),
+			),
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
+			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
 		// eslint-disable-next-line no-console
@@ -328,7 +344,7 @@ export const weeklyCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see cache metrics');
+			console.log('Expand terminal width to see uncached/cached input columns');
 		}
 	},
 });
