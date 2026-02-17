@@ -28,6 +28,15 @@ import { extractProjectName, filterEntriesBySessionProjectFilters } from '../ent
 import { logger } from '../logger.ts';
 
 const TABLE_COLUMN_COUNT = 6;
+const MAX_SESSION_TITLE_CHARS = 40;
+
+function truncateSessionTitle(title: string): string {
+	if (title.length <= MAX_SESSION_TITLE_CHARS) {
+		return title;
+	}
+
+	return `${title.slice(0, MAX_SESSION_TITLE_CHARS - 3)}...`;
+}
 
 type SessionBreakdown = ModelTokenData & {
 	sessionID: string;
@@ -327,6 +336,29 @@ export const modelCommand = define({
 
 			if (showBreakdown) {
 				for (const projectData of data.projectBreakdown) {
+					const sessionCount = projectData.sessions.length;
+					if (sessionCount === 1) {
+						const sessionData = projectData.sessions[0];
+						if (sessionData != null) {
+							const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
+							const sessionComponentCosts = await calculateComponentCostsFromEntries(
+								sessionData.entries,
+								data.model,
+								fetcher,
+							);
+
+							table.push([
+								`  ▸ ${projectData.projectName}/${truncatedSessionTitle}`,
+								formatUncachedInputColumn(sessionData, sessionComponentCosts),
+								formatCachedInputColumn(sessionData, sessionComponentCosts),
+								formatInputColumn(sessionData, sessionComponentCosts),
+								formatOutputColumn(sessionData, sessionComponentCosts),
+								pc.green(formatCurrency(sessionData.totalCost)),
+							]);
+						}
+						continue;
+					}
+
 					const projectComponentCosts = await calculateComponentCostsFromEntries(
 						projectData.entries,
 						data.model,
@@ -343,6 +375,7 @@ export const modelCommand = define({
 					]);
 
 					for (const sessionData of projectData.sessions) {
+						const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
 						const sessionComponentCosts = await calculateComponentCostsFromEntries(
 							sessionData.entries,
 							data.model,
@@ -350,7 +383,7 @@ export const modelCommand = define({
 						);
 
 						table.push([
-							`    - ${sessionData.sessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
+							`    - ${truncatedSessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
 							formatUncachedInputColumn(sessionData, sessionComponentCosts),
 							formatCachedInputColumn(sessionData, sessionComponentCosts),
 							formatInputColumn(sessionData, sessionComponentCosts),
