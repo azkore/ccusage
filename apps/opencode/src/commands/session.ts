@@ -221,7 +221,9 @@ export const sessionCommand = define({
 			breakdownEntriesBySession[sessionID] = modelEntriesByModel;
 		}
 
-		sessionData.sort((a, b) => a.lastActivity.getTime() - b.lastActivity.getTime());
+		sessionData.sort(
+			(a, b) => b.totalCost - a.totalCost || b.lastActivity.getTime() - a.lastActivity.getTime(),
+		);
 
 		const totals = {
 			inputTokens: sessionData.reduce((sum, s) => sum + s.inputTokens, 0),
@@ -269,7 +271,9 @@ export const sessionCommand = define({
 		});
 
 		const sessionsByParent = groupBy(sessionData, (s) => s.parentID ?? 'root');
-		const parentSessions = sessionsByParent.root ?? [];
+		const parentSessions = [...(sessionsByParent.root ?? [])].sort(
+			(a, b) => b.totalCost - a.totalCost || b.lastActivity.getTime() - a.lastActivity.getTime(),
+		);
 		delete sessionsByParent.root;
 
 		for (const parentSession of parentSessions) {
@@ -329,7 +333,12 @@ export const sessionCommand = define({
 				}
 			}
 
-			const subSessions = showSubagents ? sessionsByParent[parentSession.sessionID] : undefined;
+			const subSessions = showSubagents
+				? [...(sessionsByParent[parentSession.sessionID] ?? [])].sort(
+						(a, b) =>
+							b.totalCost - a.totalCost || b.lastActivity.getTime() - a.lastActivity.getTime(),
+					)
+				: undefined;
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);

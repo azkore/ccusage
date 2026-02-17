@@ -227,9 +227,11 @@ export const modelCommand = define({
 					projectName,
 					...data.metrics,
 					entries: data.entries,
-					sessions: Array.from(data.sessions.values()).sort((a, b) => b.totalCost - a.totalCost),
+					sessions: Array.from(data.sessions.values()).sort(
+						(a, b) => b.totalCost - a.totalCost || a.sessionTitle.localeCompare(b.sessionTitle),
+					),
 				}))
-				.sort((a, b) => b.totalCost - a.totalCost);
+				.sort((a, b) => b.totalCost - a.totalCost || a.projectName.localeCompare(b.projectName));
 
 			modelData.push({
 				model,
@@ -245,7 +247,7 @@ export const modelCommand = define({
 		}
 
 		// Sort by total cost descending
-		modelData.sort((a, b) => b.totalCost - a.totalCost);
+		modelData.sort((a, b) => b.totalCost - a.totalCost || a.model.localeCompare(b.model));
 
 		const totals = {
 			inputTokens: modelData.reduce((sum, d) => sum + d.inputTokens, 0),
