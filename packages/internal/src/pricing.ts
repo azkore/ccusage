@@ -212,23 +212,144 @@ export class LiteLLMPricingFetcher implements Disposable {
 		return Array.from(candidates);
 	}
 
+	private hasPricingFields(pricing: LiteLLMModelPricing): boolean {
+		return (
+			pricing.input_cost_per_token != null ||
+			pricing.output_cost_per_token != null ||
+			pricing.cache_creation_input_token_cost != null ||
+			pricing.cache_read_input_token_cost != null ||
+			pricing.input_cost_per_token_above_200k_tokens != null ||
+			pricing.output_cost_per_token_above_200k_tokens != null ||
+			pricing.cache_creation_input_token_cost_above_200k_tokens != null ||
+			pricing.cache_read_input_token_cost_above_200k_tokens != null ||
+			pricing.input_cost_per_token_above_128k_tokens != null ||
+			pricing.output_cost_per_token_above_128k_tokens != null
+		);
+	}
+
+	private normalizeModelNameForMatching(modelName: string): string {
+		const lowered = modelName.toLowerCase();
+		const parts = lowered.split('/');
+		return parts.at(-1) ?? lowered;
+	}
+
+	private tokenizeModelName(modelName: string): string[] {
+		return this.normalizeModelNameForMatching(modelName)
+			.split(/[^a-z0-9]+/)
+			.filter((token) => token !== '');
+	}
+
+	private numericTokens(tokens: string[]): number[] {
+		return tokens.filter((token) => /^\d+$/.test(token)).map((token) => Number.parseInt(token, 10));
+	}
+
+	private scoreFallbackCandidate(targetModel: string, candidateModel: string): number {
+		const targetTokens = this.tokenizeModelName(targetModel);
+		const candidateTokens = this.tokenizeModelName(candidateModel);
+
+		if (targetTokens.length === 0 || candidateTokens.length === 0) {
+			return Number.NEGATIVE_INFINITY;
+		}
+
+		const targetFamily = targetTokens[0];
+		const candidateFamily = candidateTokens[0];
+		if (targetFamily == null || candidateFamily == null || targetFamily !== candidateFamily) {
+			return Number.NEGATIVE_INFINITY;
+		}
+
+		const candidateSet = new Set(candidateTokens);
+		const sharedTokens = targetTokens.filter((token) => candidateSet.has(token));
+		if (sharedTokens.length === 0) {
+			return Number.NEGATIVE_INFINITY;
+		}
+
+		let score = sharedTokens.length * 10;
+
+		const targetHasCodex = targetTokens.includes('codex');
+		const candidateHasCodex = candidateTokens.includes('codex');
+		if (targetHasCodex) {
+			score += candidateHasCodex ? 60 : -80;
+		}
+
+		const targetHasMini = targetTokens.includes('mini');
+		const candidateHasMini = candidateTokens.includes('mini');
+		if (targetHasMini === candidateHasMini) {
+			score += 8;
+		}
+
+		const targetNormalized = this.normalizeModelNameForMatching(targetModel);
+		const candidateNormalized = this.normalizeModelNameForMatching(candidateModel);
+		if (
+			targetNormalized.includes(candidateNormalized) ||
+			candidateNormalized.includes(targetNormalized)
+		) {
+			score += 12;
+		}
+
+		const targetNumbers = this.numericTokens(targetTokens);
+		const candidateNumbers = this.numericTokens(candidateTokens);
+		const targetMajor = targetNumbers[0];
+		const candidateMajor = candidateNumbers[0];
+		if (targetMajor != null && candidateMajor != null) {
+			const majorDistance = Math.abs(targetMajor - candidateMajor);
+			score -= majorDistance * 50;
+
+			const targetMinor = targetNumbers[1] ?? 0;
+			const candidateMinor = candidateNumbers[1] ?? 0;
+			const minorDistance = Math.abs(targetMinor - candidateMinor);
+			score -= minorDistance * 8;
+		}
+
+		score -= Math.max(0, targetTokens.length - candidateTokens.length) * 2;
+
+		return score;
+	}
+
 	async getModelPricing(modelName: string): Result.ResultAsync<LiteLLMModelPricing | null, Error> {
 		return Result.pipe(
 			this.ensurePricingLoaded(),
 			Result.map((pricing) => {
 				for (const candidate of this.createMatchingCandidates(modelName)) {
 					const direct = pricing.get(candidate);
-					if (direct != null) {
+					if (direct != null && this.hasPricingFields(direct)) {
 						return direct;
 					}
 				}
 
 				const lower = modelName.toLowerCase();
+				let bestMatch: LiteLLMModelPricing | null = null;
+				let bestMatchKey: string | null = null;
+				let bestScore = Number.NEGATIVE_INFINITY;
+
 				for (const [key, value] of pricing) {
-					const comparison = key.toLowerCase();
-					if (comparison.includes(lower) || lower.includes(comparison)) {
-						return value;
+					if (!this.hasPricingFields(value)) {
+						continue;
 					}
+
+					const comparison = key.toLowerCase();
+					if (!comparison.includes(lower) && !lower.includes(comparison)) {
+						const score = this.scoreFallbackCandidate(modelName, key);
+						if (score > bestScore) {
+							bestScore = score;
+							bestMatch = value;
+							bestMatchKey = key;
+						}
+						continue;
+					}
+
+					const containsScore = this.scoreFallbackCandidate(modelName, key) + 20;
+					if (containsScore > bestScore) {
+						bestScore = containsScore;
+						bestMatch = value;
+						bestMatchKey = key;
+					}
+				}
+
+				if (bestMatch != null) {
+					this.logger.debug(
+						`Model pricing fallback for ${modelName}: ${bestMatchKey ?? 'unknown'} (score=${bestScore})`,
+					);
+					return bestMatch;
 				}
 
 				return null;
@@ -403,6 +524,32 @@ if (import.meta.vitest != null) {
 			);
 
 			expect(cost).toBeCloseTo(1000 * 1.25e-6 + 500 * 1e-5 + 200 * 1.25e-7);
+		});
+
+		it('skips capability-only model matches and prefers closest priced codex variant', async () => {
+			using fetcher = new LiteLLMPricingFetcher({
+				offline: true,
+				offlineLoader: async () => ({
+					'github_copilot/gpt-5.3-codex': {
+						max_input_tokens: 128000,
+						max_output_tokens: 128000,
+					},
+					'gpt-5.2-codex': {
+						input_cost_per_token: 1.75e-6,
+						output_cost_per_token: 1.4e-5,
+						cache_read_input_token_cost: 1.75e-7,
+					},
+					'gpt-5': {
+						input_cost_per_token: 1.25e-6,
+						output_cost_per_token: 1e-5,
+						cache_read_input_token_cost: 1.25e-7,
+					},
+				}),
+			});
+
+			const pricing = await Result.unwrap(fetcher.getModelPricing('gpt-5.3-codex'));
+			expect(pricing).not.toBeNull();
+			expect(pricing?.input_cost_per_token).toBe(1.75e-6);
 		});
 
 		it('calculates tiered pricing for tokens exceeding 200k threshold (300k input, 250k output, 300k cache creation, 250k cache read)', async () => {
