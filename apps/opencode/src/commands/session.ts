@@ -78,10 +78,15 @@ export const sessionCommand = define({
 			type: 'boolean',
 			description: 'Show per-model breakdown rows',
 		},
+		subagents: {
+			type: 'boolean',
+			description: 'Show subagent sessions',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
 		const showBreakdown = ctx.values.full === true;
+		const showSubagents = ctx.values.subagents === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -324,7 +329,7 @@ export const sessionCommand = define({
 				}
 			}
 
-			const subSessions = sessionsByParent[parentSession.sessionID];
+			const subSessions = showSubagents ? sessionsByParent[parentSession.sessionID] : undefined;
 			if (subSessions != null && subSessions.length > 0) {
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);
