@@ -111,6 +111,7 @@ export const modelCommand = define({
 		for (const [model, modelEntries] of Object.entries(entriesByModel)) {
 			let inputTokens = 0;
 			let outputTokens = 0;
+			let reasoningTokens = 0;
 			let cacheCreationTokens = 0;
 			let cacheReadTokens = 0;
 			let totalCost = 0;
@@ -119,13 +120,14 @@ export const modelCommand = define({
 				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
 			}
 
 			const componentCosts = await calculateComponentCosts(
-				{ inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens },
+				{ inputTokens, outputTokens, reasoningTokens, cacheCreationTokens, cacheReadTokens },
 				model,
 				fetcher,
 			);
@@ -134,6 +136,7 @@ export const modelCommand = define({
 				model,
 				inputTokens,
 				outputTokens,
+				reasoningTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
 				totalCost,
@@ -147,10 +150,12 @@ export const modelCommand = define({
 		const totals = {
 			inputTokens: modelData.reduce((sum, d) => sum + d.inputTokens, 0),
 			outputTokens: modelData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: modelData.reduce((sum, d) => sum + d.reasoningTokens, 0),
 			cacheCreationTokens: modelData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
 			cacheReadTokens: modelData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
 			totalCost: modelData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
+		const hasReasoningTokens = totals.reasoningTokens > 0;
 
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -161,12 +166,14 @@ export const modelCommand = define({
 							model: d.model,
 							inputTokens: totalInputTokens(d),
 							outputTokens: d.outputTokens,
+							reasoningTokens: d.reasoningTokens,
 							cacheReadTokens: d.cacheReadTokens,
 							totalCost: d.totalCost,
 						})),
 						totals: {
 							inputTokens: totals.inputTokens + totals.cacheCreationTokens + totals.cacheReadTokens,
 							outputTokens: totals.outputTokens,
+							reasoningTokens: totals.reasoningTokens,
 							cacheReadTokens: totals.cacheReadTokens,
 							totalCost: totals.totalCost,
 						},
@@ -182,9 +189,20 @@ export const modelCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - By Model\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Model', 'Input', 'Output', 'Cache', 'Cost (USD)'],
+			head: [
+				'Model',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cache',
+				'Cost (USD)',
+			],
 			colAligns: ['left', 'right', 'right', 'right', 'right'],
-			compactHead: ['Model', 'Input', 'Output', 'Cost (USD)'],
+			compactHead: [
+				'Model',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cost (USD)',
+			],
 			compactColAligns: ['left', 'right', 'right', 'right'],
 			compactThreshold: 80,
 			forceCompact: Boolean(ctx.values.compact),
@@ -207,7 +225,11 @@ export const modelCommand = define({
 		table.push([
 			pc.yellow('Total'),
 			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(
+				hasReasoningTokens
+					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
+					: formatNumber(totals.outputTokens),
+			),
 			pc.yellow(
 				formatAggregateCacheColumn(
 					totals.inputTokens,

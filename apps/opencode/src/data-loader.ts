@@ -75,6 +75,7 @@ export type LoadedUsageEntry = {
 	usage: {
 		inputTokens: number;
 		outputTokens: number;
+		reasoningTokens: number;
 		cacheCreationInputTokens: number;
 		cacheReadInputTokens: number;
 	};
@@ -95,6 +96,7 @@ type MessageRow = {
 	modelID: string | null;
 	input: number | null;
 	output: number | null;
+	reasoning: number | null;
 	cache_read: number | null;
 	cache_write: number | null;
 	cost: number | null;
@@ -185,6 +187,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 					json_extract(data, '$.modelID') as modelID,
 					json_extract(data, '$.tokens.input') as input,
 					json_extract(data, '$.tokens.output') as output,
+					json_extract(data, '$.tokens.reasoning') as reasoning,
 					json_extract(data, '$.tokens.cache.read') as cache_read,
 					json_extract(data, '$.tokens.cache.write') as cache_write,
 					json_extract(data, '$.cost') as cost,
@@ -200,7 +203,8 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 		for (const row of rows) {
 			const inputTokens = row.input ?? 0;
 			const outputTokens = row.output ?? 0;
-			if (inputTokens === 0 && outputTokens === 0) {
+			const reasoningTokens = row.reasoning ?? 0;
+			if (inputTokens === 0 && outputTokens === 0 && reasoningTokens === 0) {
 				continue;
 			}
 
@@ -210,6 +214,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 				usage: {
 					inputTokens,
 					outputTokens,
+					reasoningTokens,
 					cacheCreationInputTokens: row.cache_write ?? 0,
 					cacheReadInputTokens: row.cache_read ?? 0,
 				},

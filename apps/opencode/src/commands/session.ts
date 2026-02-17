@@ -123,6 +123,7 @@ export const sessionCommand = define({
 			parentID: string | null;
 			inputTokens: number;
 			outputTokens: number;
+			reasoningTokens: number;
 			cacheCreationTokens: number;
 			cacheReadTokens: number;
 			totalCost: number;
@@ -136,6 +137,7 @@ export const sessionCommand = define({
 		for (const [sessionID, sessionEntries] of Object.entries(entriesBySession)) {
 			let inputTokens = 0;
 			let outputTokens = 0;
+			let reasoningTokens = 0;
 			let cacheCreationTokens = 0;
 			let cacheReadTokens = 0;
 			let totalCost = 0;
@@ -147,6 +149,7 @@ export const sessionCommand = define({
 				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
@@ -161,6 +164,7 @@ export const sessionCommand = define({
 					mb = {
 						inputTokens: 0,
 						outputTokens: 0,
+						reasoningTokens: 0,
 						cacheCreationTokens: 0,
 						cacheReadTokens: 0,
 						totalCost: 0,
@@ -169,6 +173,7 @@ export const sessionCommand = define({
 				}
 				mb.inputTokens += entry.usage.inputTokens;
 				mb.outputTokens += entry.usage.outputTokens;
+				mb.reasoningTokens += entry.usage.reasoningTokens;
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
@@ -186,6 +191,7 @@ export const sessionCommand = define({
 				parentID: metadata?.parentID ?? null,
 				inputTokens,
 				outputTokens,
+				reasoningTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
 				totalCost,
@@ -200,10 +206,12 @@ export const sessionCommand = define({
 		const totals = {
 			inputTokens: sessionData.reduce((sum, s) => sum + s.inputTokens, 0),
 			outputTokens: sessionData.reduce((sum, s) => sum + s.outputTokens, 0),
+			reasoningTokens: sessionData.reduce((sum, s) => sum + s.reasoningTokens, 0),
 			cacheCreationTokens: sessionData.reduce((sum, s) => sum + s.cacheCreationTokens, 0),
 			cacheReadTokens: sessionData.reduce((sum, s) => sum + s.cacheReadTokens, 0),
 			totalCost: sessionData.reduce((sum, s) => sum + s.totalCost, 0),
 		};
+		const hasReasoningTokens = totals.reasoningTokens > 0;
 
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -224,9 +232,22 @@ export const sessionCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Sessions\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Session', 'Models', 'Input', 'Output', 'Cache', 'Cost (USD)'],
+			head: [
+				'Session',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cache',
+				'Cost (USD)',
+			],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
-			compactHead: ['Session', 'Models', 'Input', 'Output', 'Cost (USD)'],
+			compactHead: [
+				'Session',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cost (USD)',
+			],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -248,13 +269,16 @@ export const sessionCommand = define({
 				parentSession.inputTokens +
 				parentSession.cacheCreationTokens +
 				parentSession.cacheReadTokens;
+			const parentOutputDisplay = hasReasoningTokens
+				? `${formatNumber(parentSession.outputTokens)} / ${formatNumber(parentSession.reasoningTokens)}`
+				: formatNumber(parentSession.outputTokens);
 
 			// Session summary row (no $/M — may have mixed models)
 			table.push([
 				parentSessionCell,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
 				formatNumber(parentInput),
-				formatNumber(parentSession.outputTokens),
+				parentOutputDisplay,
 				formatAggregateCacheColumn(
 					parentSession.inputTokens,
 					parentSession.cacheCreationTokens,
@@ -294,12 +318,15 @@ export const sessionCommand = define({
 					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}`)}`;
 					const subInput =
 						subSession.inputTokens + subSession.cacheCreationTokens + subSession.cacheReadTokens;
+					const subOutputDisplay = hasReasoningTokens
+						? `${formatNumber(subSession.outputTokens)} / ${formatNumber(subSession.reasoningTokens)}`
+						: formatNumber(subSession.outputTokens);
 
 					table.push([
 						subSessionCell,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
 						formatNumber(subInput),
-						formatNumber(subSession.outputTokens),
+						subOutputDisplay,
 						formatAggregateCacheColumn(
 							subSession.inputTokens,
 							subSession.cacheCreationTokens,
@@ -337,6 +364,9 @@ export const sessionCommand = define({
 					parentSession.inputTokens + subSessions.reduce((sum, s) => sum + s.inputTokens, 0);
 				const subtotalOutputTokens =
 					parentSession.outputTokens + subSessions.reduce((sum, s) => sum + s.outputTokens, 0);
+				const subtotalReasoningTokens =
+					parentSession.reasoningTokens +
+					subSessions.reduce((sum, s) => sum + s.reasoningTokens, 0);
 				const subtotalCacheCreationTokens =
 					parentSession.cacheCreationTokens +
 					subSessions.reduce((sum, s) => sum + s.cacheCreationTokens, 0);
@@ -353,7 +383,11 @@ export const sessionCommand = define({
 					pc.dim('  Total (with subagents)'),
 					'',
 					pc.yellow(formatNumber(subtotalInput)),
-					pc.yellow(formatNumber(subtotalOutputTokens)),
+					pc.yellow(
+						hasReasoningTokens
+							? `${formatNumber(subtotalOutputTokens)} / ${formatNumber(subtotalReasoningTokens)}`
+							: formatNumber(subtotalOutputTokens),
+					),
 					pc.yellow(
 						formatAggregateCacheColumn(
 							subtotalInputTokens,
@@ -373,7 +407,11 @@ export const sessionCommand = define({
 			pc.yellow('Total'),
 			'',
 			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(
+				hasReasoningTokens
+					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
+					: formatNumber(totals.outputTokens),
+			),
 			pc.yellow(
 				formatAggregateCacheColumn(
 					totals.inputTokens,

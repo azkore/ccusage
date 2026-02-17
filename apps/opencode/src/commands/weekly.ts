@@ -135,6 +135,7 @@ export const weeklyCommand = define({
 			week: string;
 			inputTokens: number;
 			outputTokens: number;
+			reasoningTokens: number;
 			cacheCreationTokens: number;
 			cacheReadTokens: number;
 			totalCost: number;
@@ -145,6 +146,7 @@ export const weeklyCommand = define({
 		for (const [week, weekEntries] of Object.entries(entriesByWeek)) {
 			let inputTokens = 0;
 			let outputTokens = 0;
+			let reasoningTokens = 0;
 			let cacheCreationTokens = 0;
 			let cacheReadTokens = 0;
 			let totalCost = 0;
@@ -155,6 +157,7 @@ export const weeklyCommand = define({
 				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
@@ -165,6 +168,7 @@ export const weeklyCommand = define({
 					mb = {
 						inputTokens: 0,
 						outputTokens: 0,
+						reasoningTokens: 0,
 						cacheCreationTokens: 0,
 						cacheReadTokens: 0,
 						totalCost: 0,
@@ -173,6 +177,7 @@ export const weeklyCommand = define({
 				}
 				mb.inputTokens += entry.usage.inputTokens;
 				mb.outputTokens += entry.usage.outputTokens;
+				mb.reasoningTokens += entry.usage.reasoningTokens;
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
@@ -182,6 +187,7 @@ export const weeklyCommand = define({
 				week,
 				inputTokens,
 				outputTokens,
+				reasoningTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
 				totalCost,
@@ -195,10 +201,12 @@ export const weeklyCommand = define({
 		const totals = {
 			inputTokens: weeklyData.reduce((sum, d) => sum + d.inputTokens, 0),
 			outputTokens: weeklyData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: weeklyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
 			cacheCreationTokens: weeklyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
 			cacheReadTokens: weeklyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
 			totalCost: weeklyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
+		const hasReasoningTokens = totals.reasoningTokens > 0;
 
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -219,9 +227,22 @@ export const weeklyCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Weekly\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Week', 'Models', 'Input', 'Output', 'Cache', 'Cost (USD)'],
+			head: [
+				'Week',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cache',
+				'Cost (USD)',
+			],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
-			compactHead: ['Week', 'Models', 'Input', 'Output', 'Cost (USD)'],
+			compactHead: [
+				'Week',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cost (USD)',
+			],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -237,7 +258,11 @@ export const weeklyCommand = define({
 				pc.bold(data.week),
 				pc.bold('Weekly Total'),
 				pc.bold(formatNumber(weekInput)),
-				pc.bold(formatNumber(data.outputTokens)),
+				pc.bold(
+					hasReasoningTokens
+						? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
+						: formatNumber(data.outputTokens),
+				),
 				pc.bold(
 					formatAggregateCacheColumn(
 						data.inputTokens,
@@ -281,7 +306,11 @@ export const weeklyCommand = define({
 			pc.yellow('Total'),
 			'',
 			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(
+				hasReasoningTokens
+					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
+					: formatNumber(totals.outputTokens),
+			),
 			pc.yellow(
 				formatAggregateCacheColumn(
 					totals.inputTokens,

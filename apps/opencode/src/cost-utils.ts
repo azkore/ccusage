@@ -35,7 +35,7 @@ export async function calculateCostForEntry(
 	const result = await fetcher.calculateCostFromTokens(
 		{
 			input_tokens: entry.usage.inputTokens,
-			output_tokens: entry.usage.outputTokens,
+			output_tokens: entry.usage.outputTokens + entry.usage.reasoningTokens,
 			cache_creation_input_tokens: entry.usage.cacheCreationInputTokens,
 			cache_read_input_tokens: entry.usage.cacheReadInputTokens,
 		},
@@ -64,6 +64,7 @@ export async function calculateComponentCosts(
 	tokens: {
 		inputTokens: number;
 		outputTokens: number;
+		reasoningTokens: number;
 		cacheCreationTokens: number;
 		cacheReadTokens: number;
 	},
@@ -92,7 +93,7 @@ export async function calculateComponentCosts(
 	const outputCost = fetcher.calculateCostFromPricing(
 		{
 			input_tokens: 0,
-			output_tokens: tokens.outputTokens,
+			output_tokens: tokens.outputTokens + tokens.reasoningTokens,
 		},
 		pricing,
 	);
@@ -193,6 +194,7 @@ function colorizeCachePct(pct: number): string {
 export type ModelTokenData = {
 	inputTokens: number;
 	outputTokens: number;
+	reasoningTokens: number;
 	cacheCreationTokens: number;
 	cacheReadTokens: number;
 	totalCost: number;
@@ -228,13 +230,18 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
  * Format the "Output" column value: output tokens with $/M rate.
  */
 export function formatOutputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
+	const outputTokenDisplay =
+		data.reasoningTokens > 0
+			? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
+			: formatNumber(data.outputTokens);
+
 	if (componentCosts == null) {
-		return formatNumber(data.outputTokens);
+		return outputTokenDisplay;
 	}
-	const rate = formatRate(componentCosts.outputCost, data.outputTokens);
-	return rate !== ''
-		? `${formatNumber(data.outputTokens)}\n${pc.dim(rate)}`
-		: formatNumber(data.outputTokens);
+
+	const outputTotalTokens = data.outputTokens + data.reasoningTokens;
+	const rate = formatRate(componentCosts.outputCost, outputTotalTokens);
+	return rate !== '' ? `${outputTokenDisplay}\n${pc.dim(rate)}` : outputTokenDisplay;
 }
 
 /**

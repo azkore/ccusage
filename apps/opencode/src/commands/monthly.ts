@@ -116,6 +116,7 @@ export const monthlyCommand = define({
 			month: string;
 			inputTokens: number;
 			outputTokens: number;
+			reasoningTokens: number;
 			cacheCreationTokens: number;
 			cacheReadTokens: number;
 			totalCost: number;
@@ -126,6 +127,7 @@ export const monthlyCommand = define({
 		for (const [month, monthEntries] of Object.entries(entriesByMonth)) {
 			let inputTokens = 0;
 			let outputTokens = 0;
+			let reasoningTokens = 0;
 			let cacheCreationTokens = 0;
 			let cacheReadTokens = 0;
 			let totalCost = 0;
@@ -136,6 +138,7 @@ export const monthlyCommand = define({
 				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
@@ -146,6 +149,7 @@ export const monthlyCommand = define({
 					mb = {
 						inputTokens: 0,
 						outputTokens: 0,
+						reasoningTokens: 0,
 						cacheCreationTokens: 0,
 						cacheReadTokens: 0,
 						totalCost: 0,
@@ -154,6 +158,7 @@ export const monthlyCommand = define({
 				}
 				mb.inputTokens += entry.usage.inputTokens;
 				mb.outputTokens += entry.usage.outputTokens;
+				mb.reasoningTokens += entry.usage.reasoningTokens;
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
@@ -163,6 +168,7 @@ export const monthlyCommand = define({
 				month,
 				inputTokens,
 				outputTokens,
+				reasoningTokens,
 				cacheCreationTokens,
 				cacheReadTokens,
 				totalCost,
@@ -176,10 +182,12 @@ export const monthlyCommand = define({
 		const totals = {
 			inputTokens: monthlyData.reduce((sum, d) => sum + d.inputTokens, 0),
 			outputTokens: monthlyData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: monthlyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
 			cacheCreationTokens: monthlyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
 			cacheReadTokens: monthlyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
 			totalCost: monthlyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
+		const hasReasoningTokens = totals.reasoningTokens > 0;
 
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -200,9 +208,22 @@ export const monthlyCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - Monthly\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Month', 'Models', 'Input', 'Output', 'Cache', 'Cost (USD)'],
+			head: [
+				'Month',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cache',
+				'Cost (USD)',
+			],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right'],
-			compactHead: ['Month', 'Models', 'Input', 'Output', 'Cost (USD)'],
+			compactHead: [
+				'Month',
+				'Models',
+				'Input',
+				hasReasoningTokens ? 'Output/Reasoning' : 'Output',
+				'Cost (USD)',
+			],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -218,7 +239,11 @@ export const monthlyCommand = define({
 				pc.bold(data.month),
 				pc.bold('Monthly Total'),
 				pc.bold(formatNumber(monthInput)),
-				pc.bold(formatNumber(data.outputTokens)),
+				pc.bold(
+					hasReasoningTokens
+						? `${formatNumber(data.outputTokens)} / ${formatNumber(data.reasoningTokens)}`
+						: formatNumber(data.outputTokens),
+				),
 				pc.bold(
 					formatAggregateCacheColumn(
 						data.inputTokens,
@@ -262,7 +287,11 @@ export const monthlyCommand = define({
 			pc.yellow('Total'),
 			'',
 			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatNumber(totals.outputTokens)),
+			pc.yellow(
+				hasReasoningTokens
+					? `${formatNumber(totals.outputTokens)} / ${formatNumber(totals.reasoningTokens)}`
+					: formatNumber(totals.outputTokens),
+			),
 			pc.yellow(
 				formatAggregateCacheColumn(
 					totals.inputTokens,
