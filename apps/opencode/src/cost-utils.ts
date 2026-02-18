@@ -277,6 +277,15 @@ function formatRateRange(rates: number[]): string {
 	return `${formatListRate(minRate)}-${formatListRate(maxRate)}`;
 }
 
+function formatListedRateWithAverage(listRate: string, cost: number, tokens: number): string {
+	if (!listRate.includes('-') || tokens <= 0) {
+		return listRate;
+	}
+
+	const averageRate = formatRateNumber(cost, tokens);
+	return `${listRate}(~${averageRate})`;
+}
+
 function formatPercent(numerator: number, denominator: number): string {
 	if (denominator <= 0) {
 		return pc.magenta('0%');
@@ -330,7 +339,13 @@ export function formatUncachedInputColumn(
 		return `${formatNumber(uncachedInput)}\n${uncachedPct}`;
 	}
 
-	return `${formatNumber(uncachedInput)}\n$${componentCosts.uncachedInputListRatePerMillion}/M→${pc.green(formatCurrencyValue(componentCosts.uncachedInputCost))} ${uncachedPct}`;
+	const listedRate = formatListedRateWithAverage(
+		componentCosts.uncachedInputListRatePerMillion,
+		componentCosts.uncachedInputCost,
+		uncachedInput,
+	);
+
+	return `${formatNumber(uncachedInput)}\n$${listedRate}/M→${pc.green(formatCurrencyValue(componentCosts.uncachedInputCost))} ${uncachedPct}`;
 }
 
 /** Input Cached: value + listed rate/cost/percent (or value+percent for mixed summary). */
@@ -345,7 +360,13 @@ export function formatCachedInputColumn(
 		return `${formatNumber(data.cacheReadTokens)}\n${cachedPct}`;
 	}
 
-	return `${formatNumber(data.cacheReadTokens)}\n$${componentCosts.cacheReadListRatePerMillion}/M→${pc.green(formatCurrencyValue(componentCosts.cacheReadCost))} ${cachedPct}`;
+	const listedRate = formatListedRateWithAverage(
+		componentCosts.cacheReadListRatePerMillion,
+		componentCosts.cacheReadCost,
+		data.cacheReadTokens,
+	);
+
+	return `${formatNumber(data.cacheReadTokens)}\n$${listedRate}/M→${pc.green(formatCurrencyValue(componentCosts.cacheReadCost))} ${cachedPct}`;
 }
 
 /** Input Total: value + real effective rate/cost. */
