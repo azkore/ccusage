@@ -224,14 +224,14 @@ export const monthlyCommand = define({
 			head: [
 				'Month',
 				'Models',
-				'Input Uncached',
-				'Input Cached',
-				'Input Total',
+				'Input',
 				'Output/Reasoning%',
+				'Cache Create',
+				'Cache Read',
 				'Cost (USD)',
 			],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Month', 'Models', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
+			compactHead: ['Month', 'Models', 'Input', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -246,6 +246,8 @@ export const monthlyCommand = define({
 			table.push([
 				pc.bold(data.month),
 				pc.bold('Monthly Total'),
+				pc.bold(formatNumber(monthInput)),
+				pc.bold(formatOutputValueWithReasoningPct(data.outputTokens, data.reasoningTokens)),
 				pc.bold(
 					formatAggregateUncachedInputColumn(
 						data.inputTokens,
@@ -260,8 +262,6 @@ export const monthlyCommand = define({
 						data.cacheReadTokens,
 					),
 				),
-				pc.bold(formatNumber(monthInput)),
-				pc.bold(formatOutputValueWithReasoningPct(data.outputTokens, data.reasoningTokens)),
 				pc.bold(pc.green(formatCurrency(data.totalCost))),
 			]);
 
@@ -282,10 +282,10 @@ export const monthlyCommand = define({
 					table.push([
 						'',
 						`- ${model}`,
-						formatUncachedInputColumn(metrics, componentCosts),
-						formatCachedInputColumn(metrics, componentCosts),
 						formatInputColumn(metrics, componentCosts),
 						formatOutputColumn(metrics, componentCosts),
+						formatUncachedInputColumn(metrics, componentCosts),
+						formatCachedInputColumn(metrics, componentCosts),
 						pc.green(formatCurrency(metrics.totalCost)),
 					]);
 				}
@@ -299,6 +299,8 @@ export const monthlyCommand = define({
 		table.push([
 			pc.yellow('Total'),
 			'',
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(
 				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
@@ -313,8 +315,6 @@ export const monthlyCommand = define({
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
@@ -325,7 +325,7 @@ export const monthlyCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see uncached/cached input columns');
+			console.log('Expand terminal width to see cache columns');
 		}
 	},
 });

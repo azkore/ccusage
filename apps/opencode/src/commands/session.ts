@@ -255,14 +255,14 @@ export const sessionCommand = define({
 			head: [
 				'Session',
 				'Models',
-				'Input Uncached',
-				'Input Cached',
-				'Input Total',
+				'Input',
 				'Output/Reasoning%',
+				'Cache Create',
+				'Cache Read',
 				'Cost (USD)',
 			],
 			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Session', 'Models', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
+			compactHead: ['Session', 'Models', 'Input', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
 			compactThreshold: 90,
 			forceCompact: Boolean(ctx.values.compact),
@@ -292,6 +292,8 @@ export const sessionCommand = define({
 			table.push([
 				parentSessionCell,
 				formatModelsDisplayMultiline(parentSession.modelsUsed),
+				formatNumber(parentInput),
+				parentOutputDisplay,
 				formatAggregateUncachedInputColumn(
 					parentSession.inputTokens,
 					parentSession.cacheCreationTokens,
@@ -302,8 +304,6 @@ export const sessionCommand = define({
 					parentSession.cacheCreationTokens,
 					parentSession.cacheReadTokens,
 				),
-				formatNumber(parentInput),
-				parentOutputDisplay,
 				pc.green(formatCurrency(parentSession.totalCost)),
 			]);
 
@@ -324,10 +324,10 @@ export const sessionCommand = define({
 					table.push([
 						`  - ${model}`,
 						'',
-						formatUncachedInputColumn(metrics, componentCosts),
-						formatCachedInputColumn(metrics, componentCosts),
 						formatInputColumn(metrics, componentCosts),
 						formatOutputColumn(metrics, componentCosts),
+						formatUncachedInputColumn(metrics, componentCosts),
+						formatCachedInputColumn(metrics, componentCosts),
 						pc.green(formatCurrency(metrics.totalCost)),
 					]);
 				}
@@ -352,6 +352,8 @@ export const sessionCommand = define({
 					table.push([
 						subSessionCell,
 						formatModelsDisplayMultiline(subSession.modelsUsed),
+						formatNumber(subInput),
+						subOutputDisplay,
 						formatAggregateUncachedInputColumn(
 							subSession.inputTokens,
 							subSession.cacheCreationTokens,
@@ -362,8 +364,6 @@ export const sessionCommand = define({
 							subSession.cacheCreationTokens,
 							subSession.cacheReadTokens,
 						),
-						formatNumber(subInput),
-						subOutputDisplay,
 						pc.green(formatCurrency(subSession.totalCost)),
 					]);
 
@@ -384,10 +384,10 @@ export const sessionCommand = define({
 							table.push([
 								`    - ${model}`,
 								'',
-								formatUncachedInputColumn(metrics, componentCosts),
-								formatCachedInputColumn(metrics, componentCosts),
 								formatInputColumn(metrics, componentCosts),
 								formatOutputColumn(metrics, componentCosts),
+								formatUncachedInputColumn(metrics, componentCosts),
+								formatCachedInputColumn(metrics, componentCosts),
 								pc.green(formatCurrency(metrics.totalCost)),
 							]);
 						}
@@ -416,6 +416,10 @@ export const sessionCommand = define({
 				table.push([
 					pc.dim('  Total (with subagents)'),
 					'',
+					pc.yellow(formatNumber(subtotalInput)),
+					pc.yellow(
+						formatOutputValueWithReasoningPct(subtotalOutputTokens, subtotalReasoningTokens),
+					),
 					pc.yellow(
 						formatAggregateUncachedInputColumn(
 							subtotalInputTokens,
@@ -430,10 +434,6 @@ export const sessionCommand = define({
 							subtotalCacheReadTokens,
 						),
 					),
-					pc.yellow(formatNumber(subtotalInput)),
-					pc.yellow(
-						formatOutputValueWithReasoningPct(subtotalOutputTokens, subtotalReasoningTokens),
-					),
 					pc.yellow(pc.green(formatCurrency(subtotalCost))),
 				]);
 			}
@@ -445,6 +445,8 @@ export const sessionCommand = define({
 		table.push([
 			pc.yellow('Total'),
 			'',
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(
 				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
@@ -459,8 +461,6 @@ export const sessionCommand = define({
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
@@ -471,7 +471,7 @@ export const sessionCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see uncached/cached input columns');
+			console.log('Expand terminal width to see cache columns');
 		}
 	},
 });

@@ -310,16 +310,9 @@ export const modelCommand = define({
 		console.log('\n📊 OpenCode Token Usage Report - By Model\n');
 
 		const table: ResponsiveTable = new ResponsiveTable({
-			head: [
-				'Model',
-				'Input Uncached',
-				'Input Cached',
-				'Input Total',
-				'Output/Reasoning%',
-				'Cost (USD)',
-			],
+			head: ['Model', 'Input', 'Output/Reasoning%', 'Cache Create', 'Cache Read', 'Cost (USD)'],
 			colAligns: ['left', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Model', 'Input Total', 'Output/Reasoning%', 'Cost (USD)'],
+			compactHead: ['Model', 'Input', 'Output/Reasoning%', 'Cost (USD)'],
 			compactColAligns: ['left', 'right', 'right', 'right'],
 			compactThreshold: 80,
 			forceCompact: Boolean(ctx.values.compact),
@@ -329,10 +322,10 @@ export const modelCommand = define({
 		for (const data of modelData) {
 			table.push([
 				pc.bold(data.model),
-				formatUncachedInputColumn(data, data.componentCosts),
-				formatCachedInputColumn(data, data.componentCosts),
 				formatInputColumn(data, data.componentCosts),
 				formatOutputColumn(data, data.componentCosts),
+				formatUncachedInputColumn(data, data.componentCosts),
+				formatCachedInputColumn(data, data.componentCosts),
 				pc.green(formatCurrency(data.totalCost)),
 			]);
 
@@ -351,10 +344,10 @@ export const modelCommand = define({
 
 							table.push([
 								`  ▸ ${projectData.projectName}/${truncatedSessionTitle}`,
-								formatUncachedInputColumn(sessionData, sessionComponentCosts),
-								formatCachedInputColumn(sessionData, sessionComponentCosts),
 								formatInputColumn(sessionData, sessionComponentCosts),
 								formatOutputColumn(sessionData, sessionComponentCosts),
+								formatUncachedInputColumn(sessionData, sessionComponentCosts),
+								formatCachedInputColumn(sessionData, sessionComponentCosts),
 								pc.green(formatCurrency(sessionData.totalCost)),
 							]);
 						}
@@ -369,10 +362,10 @@ export const modelCommand = define({
 
 					table.push([
 						`  ▸ ${projectData.projectName}`,
-						formatUncachedInputColumn(projectData, projectComponentCosts),
-						formatCachedInputColumn(projectData, projectComponentCosts),
 						formatInputColumn(projectData, projectComponentCosts),
 						formatOutputColumn(projectData, projectComponentCosts),
+						formatUncachedInputColumn(projectData, projectComponentCosts),
+						formatCachedInputColumn(projectData, projectComponentCosts),
 						pc.green(formatCurrency(projectData.totalCost)),
 					]);
 
@@ -386,10 +379,10 @@ export const modelCommand = define({
 
 						table.push([
 							`    - ${truncatedSessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
-							formatUncachedInputColumn(sessionData, sessionComponentCosts),
-							formatCachedInputColumn(sessionData, sessionComponentCosts),
 							formatInputColumn(sessionData, sessionComponentCosts),
 							formatOutputColumn(sessionData, sessionComponentCosts),
+							formatUncachedInputColumn(sessionData, sessionComponentCosts),
+							formatCachedInputColumn(sessionData, sessionComponentCosts),
 							pc.green(formatCurrency(sessionData.totalCost)),
 						]);
 					}
@@ -402,6 +395,8 @@ export const modelCommand = define({
 		const totalInput = totalInputTokens(totals);
 		table.push([
 			pc.yellow('Total'),
+			pc.yellow(formatNumber(totalInput)),
+			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(
 				formatAggregateUncachedInputColumn(
 					totals.inputTokens,
@@ -416,8 +411,6 @@ export const modelCommand = define({
 					totals.cacheReadTokens,
 				),
 			),
-			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
 			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
 		]);
 
@@ -428,7 +421,7 @@ export const modelCommand = define({
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
-			console.log('Expand terminal width to see uncached/cached input columns');
+			console.log('Expand terminal width to see cache columns');
 		}
 	},
 });
