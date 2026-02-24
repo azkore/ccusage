@@ -49,6 +49,11 @@ export const monthlyCommand = define({
 			short: 'p',
 			description: 'Filter sessions by project name/path',
 		},
+		model: {
+			type: 'string',
+			short: 'm',
+			description: 'Filter models by name/provider',
+		},
 		providers: {
 			type: 'boolean',
 			short: 'P',
@@ -85,6 +90,7 @@ export const monthlyCommand = define({
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
+		const modelInput = typeof ctx.values.model === 'string' ? ctx.values.model.trim() : '';
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const showBreakdown = ctx.values.full === true;
@@ -106,6 +112,7 @@ export const monthlyCommand = define({
 			{
 				idInput,
 				projectInput,
+				modelInput,
 			},
 		);
 

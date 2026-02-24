@@ -2,7 +2,7 @@ import type { LoadedUsageEntry } from './data-loader.ts';
 
 export type ProviderDisplayMode = 'always' | 'never' | 'auto';
 
-function normalizeModelName(model: string, provider: string): string {
+export function normalizeModelName(model: string, provider: string): string {
 	const providerPrefix = `${provider}/`;
 	if (model.startsWith(providerPrefix)) {
 		return model.slice(providerPrefix.length);
