@@ -26,6 +26,7 @@ import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
+import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
 
 const TABLE_COLUMN_COUNT = 6;
 const MAX_SESSION_TITLE_CHARS = 40;
@@ -64,6 +65,11 @@ export const modelCommand = define({
 			short: 'p',
 			description: 'Filter sessions by project name/path',
 		},
+		providers: {
+			type: 'boolean',
+			short: 'P',
+			description: 'Show provider prefixes in model names',
+		},
 		since: {
 			type: 'string',
 			description: 'Filter from date/time',
@@ -93,6 +99,7 @@ export const modelCommand = define({
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
 		const showBreakdown = ctx.values.full === true;
+		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -129,7 +136,11 @@ export const modelCommand = define({
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
 
-		const entriesByModel = groupBy(filteredEntries, (entry) => entry.model);
+		const modelLabelForEntry = createModelLabelResolver(
+			filteredEntries,
+			showProviders ? 'always' : 'never',
+		);
+		const entriesByModel = groupBy(filteredEntries, (entry) => modelLabelForEntry(entry));
 
 		const modelData: Array<
 			ModelTokenData & {
@@ -139,7 +150,7 @@ export const modelCommand = define({
 			}
 		> = [];
 
-		for (const [model, modelEntries] of Object.entries(entriesByModel)) {
+		for (const [modelLabel, modelEntries] of Object.entries(entriesByModel)) {
 			let inputTokens = 0;
 			let outputTokens = 0;
 			let reasoningTokens = 0;
@@ -221,7 +232,12 @@ export const modelCommand = define({
 				sessionData.entries.push(entry);
 			}
 
-			const componentCosts = await calculateComponentCostsFromEntries(modelEntries, model, fetcher);
+			const pricingModel = modelEntries[0]?.model ?? modelLabel;
+			const componentCosts = await calculateComponentCostsFromEntries(
+				modelEntries,
+				pricingModel,
+				fetcher,
+			);
 			const projectBreakdown = Array.from(projectBreakdownMap.entries())
 				.map(([projectName, data]) => ({
 					projectName,
@@ -234,7 +250,7 @@ export const modelCommand = define({
 				.sort((a, b) => b.totalCost - a.totalCost || a.projectName.localeCompare(b.projectName));
 
 			modelData.push({
-				model,
+				model: modelLabel,
 				inputTokens,
 				outputTokens,
 				reasoningTokens,
@@ -321,7 +337,7 @@ export const modelCommand = define({
 
 		for (const data of modelData) {
 			table.push([
-				pc.bold(data.model),
+				pc.bold(formatModelLabelForTable(data.model)),
 				formatInputColumn(data, data.componentCosts),
 				formatOutputColumn(data, data.componentCosts),
 				formatUncachedInputColumn(data, data.componentCosts),

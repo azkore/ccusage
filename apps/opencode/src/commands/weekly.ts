@@ -27,6 +27,7 @@ import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
+import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
 
 const TABLE_COLUMN_COUNT = 7;
 
@@ -69,6 +70,11 @@ export const weeklyCommand = define({
 			short: 'p',
 			description: 'Filter sessions by project name/path',
 		},
+		providers: {
+			type: 'boolean',
+			short: 'P',
+			description: 'Show provider prefixes in model names',
+		},
 		since: {
 			type: 'string',
 			description: 'Filter from date/time',
@@ -97,6 +103,7 @@ export const weeklyCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -133,6 +140,10 @@ export const weeklyCommand = define({
 		}
 
 		using fetcher = new LiteLLMPricingFetcher({ offline: false, logger });
+		const modelLabelForEntry = createModelLabelResolver(
+			filteredEntries,
+			showProviders ? 'always' : 'never',
+		);
 
 		const entriesByWeek = groupBy(filteredEntries, (entry) => getISOWeek(entry.timestamp));
 
@@ -161,6 +172,7 @@ export const weeklyCommand = define({
 			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
 
 			for (const entry of weekEntries) {
+				const modelLabel = modelLabelForEntry(entry);
 				const cost = await calculateCostForEntry(entry, fetcher);
 				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
@@ -168,9 +180,9 @@ export const weeklyCommand = define({
 				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
-				modelsSet.add(entry.model);
+				modelsSet.add(modelLabel);
 
-				let mb = modelBreakdown[entry.model];
+				let mb = modelBreakdown[modelLabel];
 				if (mb == null) {
 					mb = {
 						inputTokens: 0,
@@ -180,7 +192,7 @@ export const weeklyCommand = define({
 						cacheReadTokens: 0,
 						totalCost: 0,
 					};
-					modelBreakdown[entry.model] = mb;
+					modelBreakdown[modelLabel] = mb;
 				}
 				mb.inputTokens += entry.usage.inputTokens;
 				mb.outputTokens += entry.usage.outputTokens;
@@ -189,10 +201,10 @@ export const weeklyCommand = define({
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
 
-				let modelEntries = modelEntriesByModel[entry.model];
+				let modelEntries = modelEntriesByModel[modelLabel];
 				if (modelEntries == null) {
 					modelEntries = [];
-					modelEntriesByModel[entry.model] = modelEntries;
+					modelEntriesByModel[modelLabel] = modelEntries;
 				}
 				modelEntries.push(entry);
 			}
@@ -292,15 +304,16 @@ export const weeklyCommand = define({
 
 				for (const [model, metrics] of sortedModels) {
 					const modelEntries = breakdownEntriesByWeek[data.week]?.[model] ?? [];
+					const pricingModel = modelEntries[0]?.model ?? model;
 					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
 						modelEntries,
-						model,
+						pricingModel,
 						fetcher,
 					);
 
 					table.push([
 						'',
-						`- ${model}`,
+						formatModelLabelForTable(model),
 						formatInputColumn(metrics, componentCosts),
 						formatOutputColumn(metrics, componentCosts),
 						formatUncachedInputColumn(metrics, componentCosts),

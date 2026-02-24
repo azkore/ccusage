@@ -72,6 +72,7 @@ function getDatabaseSyncCtor() {
 export type LoadedUsageEntry = {
 	timestamp: Date;
 	sessionID: string;
+	provider: string;
 	usage: {
 		inputTokens: number;
 		outputTokens: number;
@@ -93,6 +94,7 @@ export type LoadedSessionMetadata = {
 
 type MessageRow = {
 	session_id: string;
+	providerID: string | null;
 	modelID: string | null;
 	input: number | null;
 	output: number | null;
@@ -184,6 +186,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 			.prepare(
 				`SELECT
 					session_id,
+					json_extract(data, '$.providerID') as providerID,
 					json_extract(data, '$.modelID') as modelID,
 					json_extract(data, '$.tokens.input') as input,
 					json_extract(data, '$.tokens.output') as output,
@@ -211,6 +214,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 			entries.push({
 				timestamp: new Date(row.time_created ?? Date.now()),
 				sessionID: row.session_id,
+				provider: row.providerID ?? 'unknown',
 				usage: {
 					inputTokens,
 					outputTokens,
