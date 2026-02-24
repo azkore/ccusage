@@ -245,14 +245,17 @@ export class ResponsiveTable {
 			const scaleFactor = availableWidth / columnWidths.reduce((sum, width) => sum + width, 0);
 			const adjustedWidths = columnWidths.map((width, index) => {
 				const align = colAligns[index];
+
+				// Never shrink numeric/right-aligned columns: truncating numbers is worse
+				// than allowing wider output. Shrink left-aligned text columns first.
+				if (align === 'right') {
+					return Math.max(width, 8);
+				}
+
 				let adjustedWidth = Math.floor(width * scaleFactor);
 
 				// Apply minimum widths based on column type
-				if (align === 'right') {
-					adjustedWidth = Math.max(adjustedWidth, 8);
-				} else {
-					adjustedWidth = Math.max(adjustedWidth, 6);
-				}
+				adjustedWidth = Math.max(adjustedWidth, 6);
 
 				return adjustedWidth;
 			});
