@@ -3,10 +3,7 @@ import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
-import {
-	calculateComponentCostsFromEntries,
-	calculateCostForEntry,
-} from '../cost-utils.ts';
+import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import {
 	filterEntriesByDateRange,
@@ -260,12 +257,9 @@ export const monthlyCommand = define({
 					);
 				}
 			}
-
 		}
 
-		table.push(
-			buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }),
-		);
+		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

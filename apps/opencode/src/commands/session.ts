@@ -5,10 +5,7 @@ import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
-import {
-	calculateComponentCostsFromEntries,
-	calculateCostForEntry,
-} from '../cost-utils.ts';
+import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
@@ -346,7 +343,12 @@ export const sessionCommand = define({
 							);
 
 							table.push(
-								buildModelBreakdownRow(formatModelLabelForTable(model), '', metrics, componentCosts),
+								buildModelBreakdownRow(
+									formatModelLabelForTable(model),
+									'',
+									metrics,
+									componentCosts,
+								),
 							);
 						}
 					}
@@ -386,9 +388,7 @@ export const sessionCommand = define({
 			}
 		}
 
-		table.push(
-			buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }),
-		);
+		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

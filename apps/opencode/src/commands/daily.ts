@@ -3,10 +3,7 @@ import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
-import {
-	calculateComponentCostsFromEntries,
-	calculateCostForEntry,
-} from '../cost-utils.ts';
+import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import {
 	filterEntriesByDateRange,
@@ -236,9 +233,7 @@ export const dailyCommand = define({
 
 		for (const data of dailyData) {
 			// Summary Row (no $/M rates — mixed models)
-			table.push(
-				buildAggregateSummaryRow(data.date, 'Daily Total', data, { bold: true, compact }),
-			);
+			table.push(buildAggregateSummaryRow(data.date, 'Daily Total', data, { bold: true, compact }));
 
 			if (showBreakdown && !compact) {
 				// Breakdown Rows (per-model, with $/M rates)
@@ -260,12 +255,9 @@ export const dailyCommand = define({
 					);
 				}
 			}
-
 		}
 
-		table.push(
-			buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }),
-		);
+		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

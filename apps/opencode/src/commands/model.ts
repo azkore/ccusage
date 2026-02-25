@@ -404,9 +404,7 @@ export const modelCommand = define({
 			}
 		}
 
-		table.push(
-			buildAggregateSummaryRow('Total', null, totals, { yellow: true, compact }),
-		);
+		table.push(buildAggregateSummaryRow('Total', null, totals, { yellow: true, compact }));
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

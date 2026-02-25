@@ -267,8 +267,6 @@ function formatCurrencyValue(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Public types and helpers
 // ---------------------------------------------------------------------------
@@ -312,7 +310,3 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 	const realRate = formatRateNumber(totalInputCost, totalInput);
 	return `${formatNumber(totalInput)}\n$${realRate}/M→${pc.green(formatCurrencyValue(totalInputCost))}`;
 }
-
-
-
-

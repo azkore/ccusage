@@ -6,7 +6,7 @@
  * three cells; OpenAI rows merge Base + Cache Create via colSpan: 2.
  */
 import type { CellOptions, TableConstructorOptions } from 'cli-table3';
-import type { ComponentCosts, ModelTokenData, TierBreakdown  } from './cost-utils.ts';
+import type { ComponentCosts, ModelTokenData, TierBreakdown } from './cost-utils.ts';
 import process from 'node:process';
 import { formatNumber } from '@ccusage/terminal/table';
 
@@ -17,10 +17,7 @@ import pc from 'picocolors';
 // Tier display helpers  (moved from cost-utils; used by cell formatters)
 // ---------------------------------------------------------------------------
 
-import {
-	formatInputColumn,
-	totalInputTokens,
-} from './cost-utils.ts';
+import { formatInputColumn, totalInputTokens } from './cost-utils.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -144,10 +141,7 @@ function formatBreakdownCell(
  * When reasoning > 0: two cells — total output with cost, reasoning count + pct.
  * When reasoning === 0: one cell with colSpan: 2.
  */
-export function buildOutputCells(
-	data: ModelTokenData,
-	componentCosts?: ComponentCosts,
-): Cell[] {
+export function buildOutputCells(data: ModelTokenData, componentCosts?: ComponentCosts): Cell[] {
 	const totalOutput = data.outputTokens + data.reasoningTokens;
 	const hasReasoning = data.reasoningTokens > 0;
 
@@ -161,9 +155,7 @@ export function buildOutputCells(
 	}
 
 	if (!hasReasoning) {
-		return [
-			{ content: outputContent, colSpan: 2, hAlign: 'right' as const },
-		];
+		return [{ content: outputContent, colSpan: 2, hAlign: 'right' as const }];
 	}
 
 	// Reasoning cell: token count + percentage
@@ -180,17 +172,12 @@ export function buildOutputCells(
  * Build the 2 output cells for an aggregate (mixed-model) row.
  * No cost rates — just token counts.
  */
-export function buildAggregateOutputCells(
-	outputTokens: number,
-	reasoningTokens: number,
-): Cell[] {
+export function buildAggregateOutputCells(outputTokens: number, reasoningTokens: number): Cell[] {
 	const totalOutput = outputTokens + reasoningTokens;
 	const hasReasoning = reasoningTokens > 0;
 
 	if (!hasReasoning) {
-		return [
-			{ content: formatNumber(totalOutput), colSpan: 2, hAlign: 'right' as const },
-		];
+		return [{ content: formatNumber(totalOutput), colSpan: 2, hAlign: 'right' as const }];
 	}
 
 	const reasoningPct = formatPercent(reasoningTokens, totalOutput);
@@ -211,10 +198,7 @@ export function buildAggregateOutputCells(
  * Returns an array of either 3 cells (Anthropic: base, cache create, cache read)
  * or 2 cells where the first has colSpan: 2 (OpenAI: no cache create distinction).
  */
-export function buildBreakdownCells(
-	data: ModelTokenData,
-	componentCosts?: ComponentCosts,
-): Cell[] {
+export function buildBreakdownCells(data: ModelTokenData, componentCosts?: ComponentCosts): Cell[] {
 	const total = totalInputTokens(data);
 	const hasCacheCreate = data.cacheCreationTokens > 0;
 
@@ -232,28 +216,21 @@ export function buildBreakdownCells(
 				? {
 						// Merge baseInput + cacheCreate tiers (cacheCreate should be zero)
 						baseTierTokens:
-							componentCosts.baseInput.baseTierTokens +
-							componentCosts.cacheCreate.baseTierTokens,
+							componentCosts.baseInput.baseTierTokens + componentCosts.cacheCreate.baseTierTokens,
 						baseTierCost:
 							componentCosts.baseInput.baseTierCost + componentCosts.cacheCreate.baseTierCost,
 						baseTierRate: componentCosts.baseInput.baseTierRate,
 						aboveTierTokens:
-							componentCosts.baseInput.aboveTierTokens +
-							componentCosts.cacheCreate.aboveTierTokens,
+							componentCosts.baseInput.aboveTierTokens + componentCosts.cacheCreate.aboveTierTokens,
 						aboveTierCost:
-							componentCosts.baseInput.aboveTierCost +
-							componentCosts.cacheCreate.aboveTierCost,
+							componentCosts.baseInput.aboveTierCost + componentCosts.cacheCreate.aboveTierCost,
 						aboveTierRate: componentCosts.baseInput.aboveTierRate,
 					}
 				: undefined,
 			uncachedPct,
 		);
 
-		const crContent = formatBreakdownCell(
-			data.cacheReadTokens,
-			componentCosts?.cacheRead,
-			crPct,
-		);
+		const crContent = formatBreakdownCell(data.cacheReadTokens, componentCosts?.cacheRead, crPct);
 
 		return [
 			{ content, colSpan: 2, hAlign: 'right' as const },
@@ -262,21 +239,13 @@ export function buildBreakdownCells(
 	}
 
 	// Anthropic-style: three separate cells
-	const baseContent = formatBreakdownCell(
-		data.inputTokens,
-		componentCosts?.baseInput,
-		basePct,
-	);
+	const baseContent = formatBreakdownCell(data.inputTokens, componentCosts?.baseInput, basePct);
 	const ccContent = formatBreakdownCell(
 		data.cacheCreationTokens,
 		componentCosts?.cacheCreate,
 		ccPct,
 	);
-	const crContent = formatBreakdownCell(
-		data.cacheReadTokens,
-		componentCosts?.cacheRead,
-		crPct,
-	);
+	const crContent = formatBreakdownCell(data.cacheReadTokens, componentCosts?.cacheRead, crPct);
 
 	return [
 		{ content: baseContent, hAlign: 'right' as const },
@@ -303,7 +272,11 @@ export function buildAggregateBreakdownCells(
 		const crPct = formatPercent(cacheReadTokens, total);
 
 		return [
-			{ content: `${formatNumber(uncachedTokens)} ${uncachedPct}`, colSpan: 2, hAlign: 'right' as const },
+			{
+				content: `${formatNumber(uncachedTokens)} ${uncachedPct}`,
+				colSpan: 2,
+				hAlign: 'right' as const,
+			},
 			{ content: `${formatNumber(cacheReadTokens)} ${crPct}`, hAlign: 'right' as const },
 		];
 	}
@@ -467,16 +440,21 @@ export function buildAggregateSummaryRow(
 ): Row {
 	const wrap = (s: string): string => {
 		let result = s;
-		if (options?.bold === true) {result = pc.bold(result);}
-		if (options?.yellow === true) {result = pc.yellow(result);}
+		if (options?.bold === true) {
+			result = pc.bold(result);
+		}
+		if (options?.yellow === true) {
+			result = pc.yellow(result);
+		}
 		return result;
 	};
 
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 
-	const costStr = options?.yellow === true
-		? pc.yellow(pc.green(`$${data.totalCost.toFixed(2)}`))
-		: pc.green(`$${data.totalCost.toFixed(2)}`);
+	const costStr =
+		options?.yellow === true
+			? pc.yellow(pc.green(`$${data.totalCost.toFixed(2)}`))
+			: pc.green(`$${data.totalCost.toFixed(2)}`);
 
 	const row: Cell[] = [wrap(firstCell)];
 	if (modelsCell != null) {
@@ -486,9 +464,10 @@ export function buildAggregateSummaryRow(
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
 		const totalOutput = data.outputTokens + data.reasoningTokens;
-		const outputStr = data.reasoningTokens > 0
-			? `${formatNumber(totalOutput)} ${formatPercent(data.reasoningTokens, totalOutput)}`
-			: formatNumber(totalOutput);
+		const outputStr =
+			data.reasoningTokens > 0
+				? `${formatNumber(totalOutput)} ${formatPercent(data.reasoningTokens, totalOutput)}`
+				: formatNumber(totalOutput);
 		row.push(
 			{ content: wrap(formatNumber(totalInput)), hAlign: 'right' as const },
 			{ content: wrap(outputStr), hAlign: 'right' as const },
@@ -539,5 +518,3 @@ export function buildCompactRow(
 	row.push(inputStr, outputStr, costStr);
 	return row;
 }
-
-
