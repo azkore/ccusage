@@ -375,7 +375,7 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 	// --- Row 2: sub-headers for Output and Input Breakdown columns ---
 	table.push([
 		{ content: pc.cyan('Reasoning'), hAlign: 'right' },
-		{ content: '', hAlign: 'right' },
+		{ content: pc.cyan('Total'), hAlign: 'right' },
 		{ content: pc.cyan('Base'), hAlign: 'right' },
 		{ content: pc.cyan('Cache Create'), hAlign: 'right' },
 		{ content: pc.cyan('Cache Read'), hAlign: 'right' },
