@@ -1,0 +1,543 @@
+/**
+ * Usage report table builder using cli-table3 directly.
+ *
+ * Provides a two-row header with "Input Breakdown" colspan spanning
+ * Base, Cache Create, and Cache Read sub-columns.  Anthropic rows use
+ * three cells; OpenAI rows merge Base + Cache Create via colSpan: 2.
+ */
+import type { CellOptions, TableConstructorOptions } from 'cli-table3';
+import type { ComponentCosts, ModelTokenData, TierBreakdown  } from './cost-utils.ts';
+import process from 'node:process';
+import { formatNumber } from '@ccusage/terminal/table';
+
+import Table from 'cli-table3';
+import pc from 'picocolors';
+
+// ---------------------------------------------------------------------------
+// Tier display helpers  (moved from cost-utils; used by cell formatters)
+// ---------------------------------------------------------------------------
+
+import {
+	formatInputColumn,
+	totalInputTokens,
+} from './cost-utils.ts';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type Cell = string | CellOptions;
+type Row = Cell[];
+
+export type UsageTableConfig = {
+	/** Label for the first column: "Date", "Week", "Month", "Session", "Model" */
+	firstColumnName: string;
+	/** Whether to include a "Models" column (false for model.ts which IS per-model) */
+	hasModelsColumn?: boolean;
+	/** Force compact mode (hide breakdown columns) */
+	forceCompact?: boolean;
+};
+
+function tierTotalTokens(t: TierBreakdown): number {
+	return t.baseTierTokens + t.aboveTierTokens;
+}
+
+function tierTotalCost(t: TierBreakdown): number {
+	return t.baseTierCost + t.aboveTierCost;
+}
+
+function formatListRate(value: number): string {
+	if (Number.isInteger(value)) {
+		return String(value);
+	}
+	return value
+		.toFixed(2)
+		.replace(/\.00$/, '')
+		.replace(/(\.\d)0$/, '$1');
+}
+
+function formatCurrencyValue(value: number): string {
+	return `$${value.toFixed(2)}`;
+}
+
+function formatSingleTierCost(ratePerMillion: number | null, cost: number): string {
+	if (ratePerMillion == null) {
+		return pc.green(formatCurrencyValue(cost));
+	}
+	return `$${formatListRate(ratePerMillion)}/M→${pc.green(formatCurrencyValue(cost))}`;
+}
+
+function formatPercent(numerator: number, denominator: number): string {
+	if (denominator <= 0) {
+		return pc.magenta('0%');
+	}
+	const pct = Math.round((numerator / denominator) * 100);
+	return pc.magenta(`${pct}%`);
+}
+
+/**
+ * Format a TierBreakdown as token line + cost line.
+ * Token line includes percentage if provided.
+ */
+function formatTierCell(
+	tier: TierBreakdown,
+	pctStr?: string,
+): { tokenLine: string; costLine: string | null } {
+	const total = tierTotalTokens(tier);
+	const cost = tierTotalCost(tier);
+
+	const pctSuffix = pctStr != null ? ` ${pctStr}` : '';
+
+	if (total <= 0) {
+		return { tokenLine: `${formatNumber(0)}${pctSuffix}`, costLine: null };
+	}
+
+	// Token line: split when there are above-tier tokens
+	const tokenLine =
+		tier.aboveTierTokens > 0
+			? `${formatNumber(tier.baseTierTokens)} + ${formatNumber(tier.aboveTierTokens)}${pctSuffix}`
+			: `${formatNumber(total)}${pctSuffix}`;
+
+	if (tier.aboveTierTokens <= 0) {
+		return {
+			tokenLine,
+			costLine: formatSingleTierCost(tier.baseTierRate, cost),
+		};
+	}
+
+	const basePart = formatSingleTierCost(tier.baseTierRate, tier.baseTierCost);
+	const abovePart = formatSingleTierCost(tier.aboveTierRate, tier.aboveTierCost);
+	return {
+		tokenLine,
+		costLine: `${basePart} ${abovePart}`,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Breakdown cell formatters
+// ---------------------------------------------------------------------------
+
+/** Format a single breakdown cell (Base, Cache Create, or Cache Read). */
+function formatBreakdownCell(
+	tokens: number,
+	tier: TierBreakdown | undefined,
+	pctStr: string,
+): string {
+	if (tier == null) {
+		return `${formatNumber(tokens)} ${pctStr}`;
+	}
+
+	const { tokenLine, costLine } = formatTierCell(tier, pctStr);
+	if (costLine == null) {
+		return tokenLine;
+	}
+	return `${tokenLine}\n${costLine}`;
+}
+
+// ---------------------------------------------------------------------------
+// Output column cell formatters
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the 2 output cells for a per-model row.
+ *
+ * When reasoning > 0: two cells — total output with cost, reasoning count + pct.
+ * When reasoning === 0: one cell with colSpan: 2.
+ */
+export function buildOutputCells(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+): Cell[] {
+	const totalOutput = data.outputTokens + data.reasoningTokens;
+	const hasReasoning = data.reasoningTokens > 0;
+
+	// Format the main output cell (total output tokens + cost)
+	let outputContent: string;
+	if (componentCosts != null && totalOutput > 0) {
+		const { tokenLine, costLine } = formatTierCell(componentCosts.output);
+		outputContent = costLine != null ? `${tokenLine}\n${costLine}` : tokenLine;
+	} else {
+		outputContent = formatNumber(totalOutput);
+	}
+
+	if (!hasReasoning) {
+		return [
+			{ content: outputContent, colSpan: 2, hAlign: 'right' as const },
+		];
+	}
+
+	// Reasoning cell: token count + percentage
+	const reasoningPct = formatPercent(data.reasoningTokens, totalOutput);
+	const reasoningContent = `${formatNumber(data.reasoningTokens)} ${reasoningPct}`;
+
+	return [
+		{ content: reasoningContent, hAlign: 'right' as const },
+		{ content: outputContent, hAlign: 'right' as const },
+	];
+}
+
+/**
+ * Build the 2 output cells for an aggregate (mixed-model) row.
+ * No cost rates — just token counts.
+ */
+export function buildAggregateOutputCells(
+	outputTokens: number,
+	reasoningTokens: number,
+): Cell[] {
+	const totalOutput = outputTokens + reasoningTokens;
+	const hasReasoning = reasoningTokens > 0;
+
+	if (!hasReasoning) {
+		return [
+			{ content: formatNumber(totalOutput), colSpan: 2, hAlign: 'right' as const },
+		];
+	}
+
+	const reasoningPct = formatPercent(reasoningTokens, totalOutput);
+
+	return [
+		{ content: `${formatNumber(reasoningTokens)} ${reasoningPct}`, hAlign: 'right' as const },
+		{ content: formatNumber(totalOutput), hAlign: 'right' as const },
+	];
+}
+
+// ---------------------------------------------------------------------------
+// Input breakdown cell formatters
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the 3 breakdown cells for a per-model row.
+ *
+ * Returns an array of either 3 cells (Anthropic: base, cache create, cache read)
+ * or 2 cells where the first has colSpan: 2 (OpenAI: no cache create distinction).
+ */
+export function buildBreakdownCells(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+): Cell[] {
+	const total = totalInputTokens(data);
+	const hasCacheCreate = data.cacheCreationTokens > 0;
+
+	const basePct = formatPercent(data.inputTokens, total);
+	const ccPct = formatPercent(data.cacheCreationTokens, total);
+	const crPct = formatPercent(data.cacheReadTokens, total);
+
+	if (!hasCacheCreate) {
+		// OpenAI-style: merge base + cache create into one colSpan: 2 cell
+		const uncachedTokens = data.inputTokens + data.cacheCreationTokens;
+		const uncachedPct = formatPercent(uncachedTokens, total);
+		const content = formatBreakdownCell(
+			uncachedTokens,
+			componentCosts != null
+				? {
+						// Merge baseInput + cacheCreate tiers (cacheCreate should be zero)
+						baseTierTokens:
+							componentCosts.baseInput.baseTierTokens +
+							componentCosts.cacheCreate.baseTierTokens,
+						baseTierCost:
+							componentCosts.baseInput.baseTierCost + componentCosts.cacheCreate.baseTierCost,
+						baseTierRate: componentCosts.baseInput.baseTierRate,
+						aboveTierTokens:
+							componentCosts.baseInput.aboveTierTokens +
+							componentCosts.cacheCreate.aboveTierTokens,
+						aboveTierCost:
+							componentCosts.baseInput.aboveTierCost +
+							componentCosts.cacheCreate.aboveTierCost,
+						aboveTierRate: componentCosts.baseInput.aboveTierRate,
+					}
+				: undefined,
+			uncachedPct,
+		);
+
+		const crContent = formatBreakdownCell(
+			data.cacheReadTokens,
+			componentCosts?.cacheRead,
+			crPct,
+		);
+
+		return [
+			{ content, colSpan: 2, hAlign: 'right' as const },
+			{ content: crContent, hAlign: 'right' as const },
+		];
+	}
+
+	// Anthropic-style: three separate cells
+	const baseContent = formatBreakdownCell(
+		data.inputTokens,
+		componentCosts?.baseInput,
+		basePct,
+	);
+	const ccContent = formatBreakdownCell(
+		data.cacheCreationTokens,
+		componentCosts?.cacheCreate,
+		ccPct,
+	);
+	const crContent = formatBreakdownCell(
+		data.cacheReadTokens,
+		componentCosts?.cacheRead,
+		crPct,
+	);
+
+	return [
+		{ content: baseContent, hAlign: 'right' as const },
+		{ content: ccContent, hAlign: 'right' as const },
+		{ content: crContent, hAlign: 'right' as const },
+	];
+}
+
+/**
+ * Build breakdown cells for an aggregate (mixed-model) row.
+ * No cost rates — just token counts with percentages on the token line.
+ */
+export function buildAggregateBreakdownCells(
+	inputTokens: number,
+	cacheCreationTokens: number,
+	cacheReadTokens: number,
+): Cell[] {
+	const total = inputTokens + cacheCreationTokens + cacheReadTokens;
+	const hasCacheCreate = cacheCreationTokens > 0;
+
+	if (!hasCacheCreate) {
+		const uncachedTokens = inputTokens + cacheCreationTokens;
+		const uncachedPct = formatPercent(uncachedTokens, total);
+		const crPct = formatPercent(cacheReadTokens, total);
+
+		return [
+			{ content: `${formatNumber(uncachedTokens)} ${uncachedPct}`, colSpan: 2, hAlign: 'right' as const },
+			{ content: `${formatNumber(cacheReadTokens)} ${crPct}`, hAlign: 'right' as const },
+		];
+	}
+
+	const basePct = formatPercent(inputTokens, total);
+	const ccPct = formatPercent(cacheCreationTokens, total);
+	const crPct = formatPercent(cacheReadTokens, total);
+
+	return [
+		{ content: `${formatNumber(inputTokens)} ${basePct}`, hAlign: 'right' as const },
+		{ content: `${formatNumber(cacheCreationTokens)} ${ccPct}`, hAlign: 'right' as const },
+		{ content: `${formatNumber(cacheReadTokens)} ${crPct}`, hAlign: 'right' as const },
+	];
+}
+
+/**
+ * Remap entry-level token counts for aggregate accumulation.
+ *
+ * OpenAI reports all non-cached input as `inputTokens` with
+ * `cacheCreationInputTokens === 0`.  Semantically these tokens are
+ * equivalent to Anthropic's cache-creation bucket, so for aggregate
+ * totals we shift them from Base → Cache Create to keep the totals
+ * meaningful across providers.
+ */
+export function remapTokensForAggregate(entry: {
+	inputTokens: number;
+	cacheCreationInputTokens: number;
+	cacheReadInputTokens: number;
+}): { base: number; cacheCreate: number; cacheRead: number } {
+	if (entry.cacheCreationInputTokens > 0) {
+		// Anthropic-style: keep as-is
+		return {
+			base: entry.inputTokens,
+			cacheCreate: entry.cacheCreationInputTokens,
+			cacheRead: entry.cacheReadInputTokens,
+		};
+	}
+	// OpenAI-style: shift uncached input into cache-create bucket
+	return {
+		base: 0,
+		cacheCreate: entry.inputTokens,
+		cacheRead: entry.cacheReadInputTokens,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Table builder
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a cli-table3 instance with the two-row header
+ * (top row uses colSpan for "Input Breakdown").
+ */
+export function createUsageTable(config: UsageTableConfig): Table.Table {
+	const hasModels = config.hasModelsColumn ?? true;
+
+	const terminalWidth =
+		Number.parseInt(process.env.COLUMNS ?? '', 10) || process.stdout.columns || 120;
+	const isCompact = config.forceCompact === true || terminalWidth < 90;
+
+	// In compact mode, drop the 3 breakdown columns entirely
+	if (isCompact) {
+		const compactOpts: TableConstructorOptions = {
+			style: { head: ['cyan'] },
+			colAligns: hasModels
+				? ['left', 'left', 'right', 'right', 'right']
+				: ['left', 'right', 'right', 'right'],
+			head: hasModels
+				? [config.firstColumnName, 'Models', 'Input', 'Output/Reasoning%', 'Cost (USD)']
+				: [config.firstColumnName, 'Input', 'Output/Reasoning%', 'Cost (USD)'],
+		};
+		return new Table(compactOpts);
+	}
+
+	// Full mode: no predefined head — we push the header rows manually
+	const opts: TableConstructorOptions = {
+		style: { head: ['cyan'] },
+	};
+	const table = new Table(opts);
+
+	// --- Row 1: top header with Input Breakdown colspan ---
+	const headerRow1: Cell[] = [
+		{ content: pc.cyan(config.firstColumnName), rowSpan: 2, vAlign: 'center' },
+	];
+	if (hasModels) {
+		headerRow1.push({ content: pc.cyan('Models'), rowSpan: 2, vAlign: 'center' });
+	}
+	headerRow1.push(
+		{ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+		{ content: pc.cyan('Output'), colSpan: 2, hAlign: 'center' },
+		{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
+		{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+	);
+	table.push(headerRow1);
+
+	// --- Row 2: sub-headers for Output and Input Breakdown columns ---
+	table.push([
+		{ content: pc.cyan('Reasoning'), hAlign: 'right' },
+		{ content: '', hAlign: 'right' },
+		{ content: pc.cyan('Base'), hAlign: 'right' },
+		{ content: pc.cyan('Cache Create'), hAlign: 'right' },
+		{ content: pc.cyan('Cache Read'), hAlign: 'right' },
+	]);
+
+	return table;
+}
+
+/**
+ * Check if a table was created in compact mode (has `head` option set).
+ * Compact tables use the standard head option; full tables have manual header rows.
+ */
+export function isCompactTable(table: Table.Table): boolean {
+	// Compact tables have the head option populated in options
+	return (table as unknown as { options: { head: string[] } }).options.head.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Row builder helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a per-model breakdown row (with cost rates).
+ * Used in --full mode under each time period / session.
+ */
+export function buildModelBreakdownRow(
+	firstCell: string,
+	modelsCell: string | null,
+	data: ModelTokenData,
+	componentCosts: ComponentCosts | undefined,
+): Row {
+	const outputCells = buildOutputCells(data, componentCosts);
+	const breakdownCells = buildBreakdownCells(data, componentCosts);
+	const row: Cell[] = [firstCell];
+	if (modelsCell != null) {
+		row.push(modelsCell);
+	}
+	row.push(
+		{ content: formatInputColumn(data, componentCosts), hAlign: 'right' as const },
+		...outputCells,
+		...breakdownCells,
+		{ content: pc.green(`$${data.totalCost.toFixed(2)}`), hAlign: 'right' as const },
+	);
+	return row;
+}
+
+/**
+ * Build an aggregate summary row (no cost rates, mixed models).
+ */
+export function buildAggregateSummaryRow(
+	firstCell: string,
+	modelsCell: string | null,
+	data: {
+		inputTokens: number;
+		outputTokens: number;
+		reasoningTokens: number;
+		cacheCreationTokens: number;
+		cacheReadTokens: number;
+		totalCost: number;
+	},
+	options?: { bold?: boolean; yellow?: boolean; compact?: boolean },
+): Row {
+	const wrap = (s: string): string => {
+		let result = s;
+		if (options?.bold === true) {result = pc.bold(result);}
+		if (options?.yellow === true) {result = pc.yellow(result);}
+		return result;
+	};
+
+	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+
+	const costStr = options?.yellow === true
+		? pc.yellow(pc.green(`$${data.totalCost.toFixed(2)}`))
+		: pc.green(`$${data.totalCost.toFixed(2)}`);
+
+	const row: Cell[] = [wrap(firstCell)];
+	if (modelsCell != null) {
+		row.push(wrap(modelsCell));
+	}
+
+	if (options?.compact === true) {
+		// Compact: single output string, no breakdown columns
+		const totalOutput = data.outputTokens + data.reasoningTokens;
+		const outputStr = data.reasoningTokens > 0
+			? `${formatNumber(totalOutput)} ${formatPercent(data.reasoningTokens, totalOutput)}`
+			: formatNumber(totalOutput);
+		row.push(
+			{ content: wrap(formatNumber(totalInput)), hAlign: 'right' as const },
+			{ content: wrap(outputStr), hAlign: 'right' as const },
+			{ content: costStr, hAlign: 'right' as const },
+		);
+		return row;
+	}
+
+	const outputCells = buildAggregateOutputCells(data.outputTokens, data.reasoningTokens);
+	const breakdownCells = buildAggregateBreakdownCells(
+		data.inputTokens,
+		data.cacheCreationTokens,
+		data.cacheReadTokens,
+	);
+
+	// Wrap cell content with styling
+	const wrapCells = (cells: Cell[]): Cell[] =>
+		cells.map((cell) => {
+			if (typeof cell === 'object' && 'content' in cell) {
+				return { ...cell, content: wrap(String(cell.content)) };
+			}
+			return wrap(String(cell));
+		});
+
+	row.push(
+		{ content: wrap(formatNumber(totalInput)), hAlign: 'right' as const },
+		...wrapCells(outputCells),
+		...wrapCells(breakdownCells),
+		{ content: costStr, hAlign: 'right' as const },
+	);
+	return row;
+}
+
+/**
+ * Build a compact-mode row (no breakdown columns).
+ */
+export function buildCompactRow(
+	firstCell: string,
+	modelsCell: string | null,
+	inputStr: string,
+	outputStr: string,
+	costStr: string,
+): Row {
+	const row: Cell[] = [firstCell];
+	if (modelsCell != null) {
+		row.push(modelsCell);
+	}
+	row.push(inputStr, outputStr, costStr);
+	return row;
+}
+
+

@@ -3,6 +3,18 @@ packages:
   - docs
   - packages/*
 
+allowBuilds:
+  esbuild: true
+  sharp: true
+  sqlite3: true
+  workerd: true
+
+blockExoticSubdeps: true
+
+catalog:
+  cli-table3: ^0.6.5
+  string-width: ^8.2.0
+
 catalogMode: strict
 
 catalogs:
@@ -75,17 +87,8 @@ enablePrePostScripts: true
 
 minimumReleaseAge: 2880
 
-# Security settings for supply chain attack prevention
-strictDepBuilds: true
-blockExoticSubdeps: true
-trustPolicy: no-downgrade
-
-# Explicitly allow build scripts for packages that require them
-# (replaces onlyBuiltDependencies)
-allowBuilds:
-  esbuild: true
-  sharp: true
-  sqlite3: true
-  workerd: true
-
 shellEmulator: true
+
+strictDepBuilds: true
+
+trustPolicy: no-downgrade

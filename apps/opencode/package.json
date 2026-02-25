@@ -51,6 +51,7 @@
 		"@ryoppippi/eslint-config": "catalog:lint",
 		"@typescript/native-preview": "catalog:types",
 		"clean-pkg-json": "catalog:release",
+		"cli-table3": "catalog:",
 		"es-toolkit": "catalog:runtime",
 		"eslint": "catalog:lint",
 		"fast-sort": "catalog:runtime",

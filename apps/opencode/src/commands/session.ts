@@ -1,36 +1,26 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
-import {
-	addEmptySeparatorRow,
-	formatCurrency,
-	formatDateCompact,
-	formatModelsDisplayMultiline,
-	formatNumber,
-	ResponsiveTable,
-} from '@ccusage/terminal/table';
+import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
 	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
-	formatAggregateCachedInputColumn,
-	formatAggregateUncachedInputColumn,
-	formatCachedInputColumn,
-	formatInputColumn,
-	formatOutputColumn,
-	formatOutputValueWithReasoningPct,
-	formatUncachedInputColumn,
-	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
-
-const TABLE_COLUMN_COUNT = 7;
+import {
+	buildAggregateSummaryRow,
+	buildModelBreakdownRow,
+	createUsageTable,
+	isCompactTable,
+	remapTokensForAggregate,
+} from '../usage-table.ts';
 const MAX_SESSION_TITLE_CHARS = 40;
 
 function truncateSessionTitle(title: string): string {
@@ -178,11 +168,12 @@ export const sessionCommand = define({
 			for (const entry of sessionEntries) {
 				const modelLabel = modelLabelForEntry(entry);
 				const cost = await calculateCostForEntry(entry, fetcher);
-				inputTokens += entry.usage.inputTokens;
+				const mapped = remapTokensForAggregate(entry.usage);
+				inputTokens += mapped.base;
 				outputTokens += entry.usage.outputTokens;
 				reasoningTokens += entry.usage.reasoningTokens;
-				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
-				cacheReadTokens += entry.usage.cacheReadInputTokens;
+				cacheCreationTokens += mapped.cacheCreate;
+				cacheReadTokens += mapped.cacheRead;
 				totalCost += cost;
 				modelsSet.add(modelLabel);
 
@@ -270,24 +261,12 @@ export const sessionCommand = define({
 		// eslint-disable-next-line no-console
 		console.log('\n📊 OpenCode Token Usage Report - Sessions\n');
 
-		const table: ResponsiveTable = new ResponsiveTable({
-			head: [
-				'Session',
-				'Models',
-				'Input',
-				'Output/Reasoning%',
-				'Cache Create',
-				'Cache Read',
-				'Cost (USD)',
-			],
-			colAligns: ['left', 'left', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Session', 'Models', 'Input', 'Output/Reasoning%', 'Cost (USD)'],
-			compactColAligns: ['left', 'left', 'right', 'right', 'right'],
-			compactThreshold: 90,
+		const table = createUsageTable({
+			firstColumnName: 'Session',
+			hasModelsColumn: true,
 			forceCompact: Boolean(ctx.values.compact),
-			style: { head: ['cyan'] },
-			dateFormatter: (dateStr: string) => formatDateCompact(dateStr),
 		});
+		const compact = isCompactTable(table);
 
 		const sessionsByParent = groupBy(sessionData, (s) => s.parentID ?? 'root');
 		const parentSessions = [...(sessionsByParent.root ?? [])].sort(
@@ -301,33 +280,17 @@ export const sessionCommand = define({
 			const displayTitle = isParent ? pc.bold(parentTitle) : parentTitle;
 			const parentSessionCell = `${displayTitle}\n${pc.dim(`${parentSession.projectName}/${parentSession.sessionID}`)}`;
 
-			const parentInput = totalInputTokens(parentSession);
-			const parentOutputDisplay = formatOutputValueWithReasoningPct(
-				parentSession.outputTokens,
-				parentSession.reasoningTokens,
+			// Session summary row (no $/M — may have mixed models)
+			table.push(
+				buildAggregateSummaryRow(
+					parentSessionCell,
+					formatModelsDisplayMultiline(parentSession.modelsUsed),
+					parentSession,
+					{ compact },
+				),
 			);
 
-			// Session summary row (no $/M — may have mixed models)
-			table.push([
-				parentSessionCell,
-				formatModelsDisplayMultiline(parentSession.modelsUsed),
-				formatNumber(parentInput),
-				parentOutputDisplay,
-				formatAggregateUncachedInputColumn(
-					parentSession.inputTokens,
-					parentSession.cacheCreationTokens,
-					parentSession.cacheReadTokens,
-				),
-				formatAggregateCachedInputColumn(
-					parentSession.inputTokens,
-					parentSession.cacheCreationTokens,
-					parentSession.cacheReadTokens,
-				),
-				pc.green(formatCurrency(parentSession.totalCost)),
-			]);
-
-			if (showBreakdown) {
-				// Per-model breakdown rows (with $/M rates)
+			if (showBreakdown && !compact) {
 				const sortedParentModels = Object.entries(parentSession.modelBreakdown).sort(
 					(a, b) => b[1].totalCost - a[1].totalCost,
 				);
@@ -341,15 +304,10 @@ export const sessionCommand = define({
 						fetcher,
 					);
 
-					table.push([
-						formatModelLabelForTable(model),
-						'',
-						formatInputColumn(metrics, componentCosts),
-						formatOutputColumn(metrics, componentCosts),
-						formatUncachedInputColumn(metrics, componentCosts),
-						formatCachedInputColumn(metrics, componentCosts),
-						pc.green(formatCurrency(metrics.totalCost)),
-					]);
+					// Session puts model label in first column, empty models column
+					table.push(
+						buildModelBreakdownRow(formatModelLabelForTable(model), '', metrics, componentCosts),
+					);
 				}
 			}
 
@@ -363,32 +321,17 @@ export const sessionCommand = define({
 				for (const subSession of subSessions) {
 					const subTitle = truncateSessionTitle(subSession.sessionTitle);
 					const subSessionCell = `  ↳ ${subTitle}\n${pc.dim(`    ${subSession.projectName}/${subSession.sessionID}`)}`;
-					const subInput = totalInputTokens(subSession);
-					const subOutputDisplay = formatOutputValueWithReasoningPct(
-						subSession.outputTokens,
-						subSession.reasoningTokens,
+
+					table.push(
+						buildAggregateSummaryRow(
+							subSessionCell,
+							formatModelsDisplayMultiline(subSession.modelsUsed),
+							subSession,
+							{ compact },
+						),
 					);
 
-					table.push([
-						subSessionCell,
-						formatModelsDisplayMultiline(subSession.modelsUsed),
-						formatNumber(subInput),
-						subOutputDisplay,
-						formatAggregateUncachedInputColumn(
-							subSession.inputTokens,
-							subSession.cacheCreationTokens,
-							subSession.cacheReadTokens,
-						),
-						formatAggregateCachedInputColumn(
-							subSession.inputTokens,
-							subSession.cacheCreationTokens,
-							subSession.cacheReadTokens,
-						),
-						pc.green(formatCurrency(subSession.totalCost)),
-					]);
-
-					if (showBreakdown) {
-						// Per-model breakdown for sub-session (with $/M rates)
+					if (showBreakdown && !compact) {
 						const sortedSubModels = Object.entries(subSession.modelBreakdown).sort(
 							(a, b) => b[1].totalCost - a[1].totalCost,
 						);
@@ -402,15 +345,9 @@ export const sessionCommand = define({
 								fetcher,
 							);
 
-							table.push([
-								formatModelLabelForTable(model),
-								'',
-								formatInputColumn(metrics, componentCosts),
-								formatOutputColumn(metrics, componentCosts),
-								formatUncachedInputColumn(metrics, componentCosts),
-								formatCachedInputColumn(metrics, componentCosts),
-								pc.green(formatCurrency(metrics.totalCost)),
-							]);
+							table.push(
+								buildModelBreakdownRow(formatModelLabelForTable(model), '', metrics, componentCosts),
+							);
 						}
 					}
 				}
@@ -431,64 +368,32 @@ export const sessionCommand = define({
 				const subtotalCost =
 					parentSession.totalCost + subSessions.reduce((sum, s) => sum + s.totalCost, 0);
 
-				const subtotalUncachedInput = subtotalInputTokens + subtotalCacheCreationTokens;
-				const subtotalInput = subtotalUncachedInput + subtotalCacheReadTokens;
-
-				table.push([
-					pc.dim('  Total (with subagents)'),
-					'',
-					pc.yellow(formatNumber(subtotalInput)),
-					pc.yellow(
-						formatOutputValueWithReasoningPct(subtotalOutputTokens, subtotalReasoningTokens),
+				table.push(
+					buildAggregateSummaryRow(
+						pc.dim('  Total (with subagents)'),
+						'',
+						{
+							inputTokens: subtotalInputTokens,
+							outputTokens: subtotalOutputTokens,
+							reasoningTokens: subtotalReasoningTokens,
+							cacheCreationTokens: subtotalCacheCreationTokens,
+							cacheReadTokens: subtotalCacheReadTokens,
+							totalCost: subtotalCost,
+						},
+						{ yellow: true, compact },
 					),
-					pc.yellow(
-						formatAggregateUncachedInputColumn(
-							subtotalInputTokens,
-							subtotalCacheCreationTokens,
-							subtotalCacheReadTokens,
-						),
-					),
-					pc.yellow(
-						formatAggregateCachedInputColumn(
-							subtotalInputTokens,
-							subtotalCacheCreationTokens,
-							subtotalCacheReadTokens,
-						),
-					),
-					pc.yellow(pc.green(formatCurrency(subtotalCost))),
-				]);
+				);
 			}
 		}
 
-		const totalInput = totalInputTokens(totals);
-
-		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
-		table.push([
-			pc.yellow('Total'),
-			'',
-			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
-			pc.yellow(
-				formatAggregateUncachedInputColumn(
-					totals.inputTokens,
-					totals.cacheCreationTokens,
-					totals.cacheReadTokens,
-				),
-			),
-			pc.yellow(
-				formatAggregateCachedInputColumn(
-					totals.inputTokens,
-					totals.cacheCreationTokens,
-					totals.cacheReadTokens,
-				),
-			),
-			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
-		]);
+		table.push(
+			buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());
 
-		if (table.isCompactMode()) {
+		if (compact) {
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console

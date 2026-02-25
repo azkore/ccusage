@@ -15,6 +15,9 @@ const MODEL_ALIASES: Record<string, string> = {
 
 const MILLION = 1_000_000;
 
+/** Anthropic tiered pricing threshold (tokens). */
+const TIERED_THRESHOLD = 200_000;
+
 function resolveModelName(modelName: string): string {
 	return MODEL_ALIASES[modelName] ?? modelName;
 }
@@ -45,89 +48,115 @@ export async function calculateCostForEntry(
 	return Result.unwrap(result, 0);
 }
 
+// ---------------------------------------------------------------------------
+// Tier breakdown types
+// ---------------------------------------------------------------------------
+
 /**
- * Component-level cost breakdown for a model's aggregated tokens
+ * Per-tier token and cost breakdown for a single token bucket.
+ * When the model has tiered pricing (e.g. Anthropic >200k), tokens that
+ * cross the threshold are split into base-tier and above-tier portions.
  */
-export type ComponentCosts = {
-	uncachedInputCost: number;
-	outputCost: number;
-	cacheReadCost: number;
-	uncachedInputListRatePerMillion: string;
-	cacheReadListRatePerMillion: string;
+export type TierBreakdown = {
+	baseTierTokens: number;
+	baseTierCost: number;
+	/** List rate in $/M for the base tier (null = unknown). */
+	baseTierRate: number | null;
+	aboveTierTokens: number;
+	aboveTierCost: number;
+	/** List rate in $/M for the above-threshold tier (null = no tiered rate). */
+	aboveTierRate: number | null;
 };
 
-type ComponentRateInfo = Pick<
-	ComponentCosts,
-	'uncachedInputListRatePerMillion' | 'cacheReadListRatePerMillion'
->;
-
-/**
- * Calculate per-component costs using the model's actual pricing.
- */
-export async function calculateComponentCosts(
-	tokens: {
-		inputTokens: number;
-		outputTokens: number;
-		reasoningTokens: number;
-		cacheCreationTokens: number;
-		cacheReadTokens: number;
-	},
-	modelName: string,
-	fetcher: LiteLLMPricingFetcher,
-): Promise<ComponentCosts> {
-	const resolvedModel = resolveModelName(modelName);
-	const pricingResult = await fetcher.getModelPricing(resolvedModel);
-	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
-
-	if (pricing == null) {
-		return {
-			uncachedInputCost: 0,
-			outputCost: 0,
-			cacheReadCost: 0,
-			uncachedInputListRatePerMillion: '0',
-			cacheReadListRatePerMillion: '0',
-		};
-	}
-
-	const rateInfo = getComponentRateInfo(pricing);
-
-	const uncachedInputCost = fetcher.calculateCostFromPricing(
-		{
-			input_tokens: tokens.inputTokens,
-			output_tokens: 0,
-			cache_creation_input_tokens: tokens.cacheCreationTokens,
-		},
-		pricing,
-	);
-
-	const outputCost = fetcher.calculateCostFromPricing(
-		{
-			input_tokens: 0,
-			output_tokens: tokens.outputTokens + tokens.reasoningTokens,
-		},
-		pricing,
-	);
-
-	const cacheReadCost = fetcher.calculateCostFromPricing(
-		{
-			input_tokens: 0,
-			output_tokens: 0,
-			cache_read_input_tokens: tokens.cacheReadTokens,
-		},
-		pricing,
-	);
-
+function emptyTier(): TierBreakdown {
 	return {
-		uncachedInputCost,
-		outputCost,
-		cacheReadCost,
-		...rateInfo,
+		baseTierTokens: 0,
+		baseTierCost: 0,
+		baseTierRate: null,
+		aboveTierTokens: 0,
+		aboveTierCost: 0,
+		aboveTierRate: null,
 	};
 }
 
+function tierTotalCost(t: TierBreakdown): number {
+	return t.baseTierCost + t.aboveTierCost;
+}
+
 /**
- * Calculate per-component costs by summing per-entry component costs.
- * This preserves per-request tier behavior and then scales each entry's
+ * Split a token count into base-tier and above-tier portions and compute cost.
+ * Mirrors the logic in LiteLLM's `calculateTieredCost`.
+ */
+function splitTier(
+	tokens: number,
+	baseRatePerToken: number | undefined,
+	aboveRatePerToken: number | undefined,
+): {
+	baseTierTokens: number;
+	baseTierCost: number;
+	aboveTierTokens: number;
+	aboveTierCost: number;
+} {
+	if (tokens <= 0) {
+		return { baseTierTokens: 0, baseTierCost: 0, aboveTierTokens: 0, aboveTierCost: 0 };
+	}
+
+	// No tiered rate or below threshold → everything at base rate
+	if (aboveRatePerToken == null || tokens <= TIERED_THRESHOLD) {
+		return {
+			baseTierTokens: tokens,
+			baseTierCost: tokens * (baseRatePerToken ?? 0),
+			aboveTierTokens: 0,
+			aboveTierCost: 0,
+		};
+	}
+
+	const below = Math.min(tokens, TIERED_THRESHOLD);
+	const above = tokens - below;
+	return {
+		baseTierTokens: below,
+		baseTierCost: below * (baseRatePerToken ?? 0),
+		aboveTierTokens: above,
+		aboveTierCost: above * aboveRatePerToken,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Component-level cost breakdown
+// ---------------------------------------------------------------------------
+
+/**
+ * Component-level cost breakdown with per-tier detail for each token bucket.
+ */
+export type ComponentCosts = {
+	baseInput: TierBreakdown;
+	cacheCreate: TierBreakdown;
+	output: TierBreakdown;
+	cacheRead: TierBreakdown;
+};
+
+function emptyComponentCosts(): ComponentCosts {
+	return {
+		baseInput: emptyTier(),
+		cacheCreate: emptyTier(),
+		output: emptyTier(),
+		cacheRead: emptyTier(),
+	};
+}
+
+/** Extract per-million list rates from pricing and write them into a TierBreakdown. */
+function setTierRates(
+	tier: TierBreakdown,
+	baseRatePerToken: number | undefined,
+	aboveRatePerToken: number | undefined,
+): void {
+	tier.baseTierRate = baseRatePerToken != null ? baseRatePerToken * MILLION : null;
+	tier.aboveTierRate = aboveRatePerToken != null ? aboveRatePerToken * MILLION : null;
+}
+
+/**
+ * Calculate per-component costs by summing per-entry tier splits.
+ * This preserves per-request tier behaviour and then scales each entry's
  * component split to match authoritative entry.costUSD when available.
  */
 export async function calculateComponentCostsFromEntries(
@@ -140,108 +169,89 @@ export async function calculateComponentCostsFromEntries(
 	const pricing: LiteLLMModelPricing | null = Result.unwrap(pricingResult, null);
 
 	if (pricing == null) {
-		return {
-			uncachedInputCost: 0,
-			outputCost: 0,
-			cacheReadCost: 0,
-			uncachedInputListRatePerMillion: '0',
-			cacheReadListRatePerMillion: '0',
-		};
+		return emptyComponentCosts();
 	}
 
-	const rateInfo = getComponentRateInfo(pricing);
+	const result = emptyComponentCosts();
 
-	let uncachedInputCost = 0;
-	let outputCost = 0;
-	let cacheReadCost = 0;
+	// Store list rates for display
+	setTierRates(
+		result.baseInput,
+		pricing.input_cost_per_token,
+		pricing.input_cost_per_token_above_200k_tokens,
+	);
+	setTierRates(
+		result.cacheCreate,
+		pricing.cache_creation_input_token_cost,
+		pricing.cache_creation_input_token_cost_above_200k_tokens,
+	);
+	setTierRates(
+		result.output,
+		pricing.output_cost_per_token,
+		pricing.output_cost_per_token_above_200k_tokens,
+	);
+	setTierRates(
+		result.cacheRead,
+		pricing.cache_read_input_token_cost,
+		pricing.cache_read_input_token_cost_above_200k_tokens,
+	);
 
 	for (const entry of entries) {
-		const entryUncachedCost = fetcher.calculateCostFromPricing(
-			{
-				input_tokens: entry.usage.inputTokens,
-				output_tokens: 0,
-				cache_creation_input_tokens: entry.usage.cacheCreationInputTokens,
-			},
-			pricing,
+		const biSplit = splitTier(
+			entry.usage.inputTokens,
+			pricing.input_cost_per_token,
+			pricing.input_cost_per_token_above_200k_tokens,
 		);
-		const entryOutputCost = fetcher.calculateCostFromPricing(
-			{
-				input_tokens: 0,
-				output_tokens: entry.usage.outputTokens + entry.usage.reasoningTokens,
-			},
-			pricing,
+		const ccSplit = splitTier(
+			entry.usage.cacheCreationInputTokens,
+			pricing.cache_creation_input_token_cost,
+			pricing.cache_creation_input_token_cost_above_200k_tokens,
 		);
-		const entryCacheReadCost = fetcher.calculateCostFromPricing(
-			{
-				input_tokens: 0,
-				output_tokens: 0,
-				cache_read_input_tokens: entry.usage.cacheReadInputTokens,
-			},
-			pricing,
+		const outSplit = splitTier(
+			entry.usage.outputTokens + entry.usage.reasoningTokens,
+			pricing.output_cost_per_token,
+			pricing.output_cost_per_token_above_200k_tokens,
+		);
+		const crSplit = splitTier(
+			entry.usage.cacheReadInputTokens,
+			pricing.cache_read_input_token_cost,
+			pricing.cache_read_input_token_cost_above_200k_tokens,
 		);
 
-		const calculatedTotal = entryUncachedCost + entryOutputCost + entryCacheReadCost;
+		const calculatedTotal =
+			biSplit.baseTierCost +
+			biSplit.aboveTierCost +
+			ccSplit.baseTierCost +
+			ccSplit.aboveTierCost +
+			outSplit.baseTierCost +
+			outSplit.aboveTierCost +
+			crSplit.baseTierCost +
+			crSplit.aboveTierCost;
+
 		const authoritativeTotal = entry.costUSD != null && entry.costUSD > 0 ? entry.costUSD : null;
+		const scale =
+			authoritativeTotal != null && calculatedTotal > 0 ? authoritativeTotal / calculatedTotal : 1;
 
-		if (authoritativeTotal != null && calculatedTotal > 0) {
-			const scale = authoritativeTotal / calculatedTotal;
-			uncachedInputCost += entryUncachedCost * scale;
-			outputCost += entryOutputCost * scale;
-			cacheReadCost += entryCacheReadCost * scale;
-			continue;
-		}
+		// Accumulate with optional authoritative scaling
+		const accum = (target: TierBreakdown, split: ReturnType<typeof splitTier>): void => {
+			target.baseTierTokens += split.baseTierTokens;
+			target.baseTierCost += split.baseTierCost * scale;
+			target.aboveTierTokens += split.aboveTierTokens;
+			target.aboveTierCost += split.aboveTierCost * scale;
+		};
 
-		uncachedInputCost += entryUncachedCost;
-		outputCost += entryOutputCost;
-		cacheReadCost += entryCacheReadCost;
+		accum(result.baseInput, biSplit);
+		accum(result.cacheCreate, ccSplit);
+		accum(result.output, outSplit);
+		accum(result.cacheRead, crSplit);
 	}
 
-	return {
-		uncachedInputCost,
-		outputCost,
-		cacheReadCost,
-		...rateInfo,
-	};
+	return result;
 }
 
-function getComponentRateInfo(pricing: LiteLLMModelPricing): ComponentRateInfo {
-	const inputBaseRate =
-		pricing.input_cost_per_token != null ? pricing.input_cost_per_token * MILLION : null;
-	const inputTieredRate =
-		pricing.input_cost_per_token_above_200k_tokens != null
-			? pricing.input_cost_per_token_above_200k_tokens * MILLION
-			: null;
-	const cacheCreateBaseRate =
-		pricing.cache_creation_input_token_cost != null
-			? pricing.cache_creation_input_token_cost * MILLION
-			: null;
-	const cacheCreateTieredRate =
-		pricing.cache_creation_input_token_cost_above_200k_tokens != null
-			? pricing.cache_creation_input_token_cost_above_200k_tokens * MILLION
-			: null;
-	const cacheReadBaseRate =
-		pricing.cache_read_input_token_cost != null
-			? pricing.cache_read_input_token_cost * MILLION
-			: null;
-	const cacheReadTieredRate =
-		pricing.cache_read_input_token_cost_above_200k_tokens != null
-			? pricing.cache_read_input_token_cost_above_200k_tokens * MILLION
-			: null;
-
-	const uncachedInputListRatePerMillion = formatRateRange(
-		[inputBaseRate, inputTieredRate, cacheCreateBaseRate, cacheCreateTieredRate].filter(
-			(rate): rate is number => rate != null,
-		),
-	);
-	const cacheReadListRatePerMillion = formatRateRange(
-		[cacheReadBaseRate, cacheReadTieredRate].filter((rate): rate is number => rate != null),
-	);
-
-	return {
-		uncachedInputListRatePerMillion,
-		cacheReadListRatePerMillion,
-	};
-}
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
 
 function formatRateNumber(cost: number, tokens: number): string {
 	if (tokens <= 0) {
@@ -253,51 +263,15 @@ function formatRateNumber(cost: number, tokens: number): string {
 		.replace(/(\.\d)0$/, '$1');
 }
 
-function formatListRate(value: number): string {
-	if (Number.isInteger(value)) {
-		return String(value);
-	}
-	return value
-		.toFixed(2)
-		.replace(/\.00$/, '')
-		.replace(/(\.\d)0$/, '$1');
-}
-
-function formatRateRange(rates: number[]): string {
-	if (rates.length === 0) {
-		return '0';
-	}
-
-	const minRate = Math.min(...rates);
-	const maxRate = Math.max(...rates);
-	if (minRate === maxRate) {
-		return formatListRate(minRate);
-	}
-
-	return `${formatListRate(minRate)}-${formatListRate(maxRate)}`;
-}
-
-function formatListedRateWithAverage(listRate: string, cost: number, tokens: number): string {
-	if (!listRate.includes('-') || tokens <= 0) {
-		return listRate;
-	}
-
-	const averageRate = formatRateNumber(cost, tokens);
-	return `${listRate}(~${averageRate})`;
-}
-
-function formatPercent(numerator: number, denominator: number): string {
-	if (denominator <= 0) {
-		return pc.magenta('0%');
-	}
-
-	const pct = Math.round((numerator / denominator) * 100);
-	return pc.magenta(`${pct}%`);
-}
-
 function formatCurrencyValue(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
+
+
+
+// ---------------------------------------------------------------------------
+// Public types and helpers
+// ---------------------------------------------------------------------------
 
 /**
  * Aggregated token data for a single model (used in breakdown rows)
@@ -311,13 +285,6 @@ export type ModelTokenData = {
 	totalCost: number;
 };
 
-export function uncachedInputTokens(data: {
-	inputTokens: number;
-	cacheCreationTokens: number;
-}): number {
-	return data.inputTokens + data.cacheCreationTokens;
-}
-
 export function totalInputTokens(data: {
 	inputTokens: number;
 	cacheCreationTokens: number;
@@ -326,48 +293,9 @@ export function totalInputTokens(data: {
 	return data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 }
 
-/** Input Uncached: value + listed rate/cost/percent (or value+percent for mixed summary). */
-export function formatUncachedInputColumn(
-	data: ModelTokenData,
-	componentCosts?: ComponentCosts,
-): string {
-	const uncachedInput = uncachedInputTokens(data);
-	const totalInput = totalInputTokens(data);
-	const uncachedPct = formatPercent(uncachedInput, totalInput);
-
-	if (componentCosts == null) {
-		return `${formatNumber(uncachedInput)}\n${uncachedPct}`;
-	}
-
-	const listedRate = formatListedRateWithAverage(
-		componentCosts.uncachedInputListRatePerMillion,
-		componentCosts.uncachedInputCost,
-		uncachedInput,
-	);
-
-	return `${formatNumber(uncachedInput)}\n$${listedRate}/M→${pc.green(formatCurrencyValue(componentCosts.uncachedInputCost))} ${uncachedPct}`;
-}
-
-/** Input Cached: value + listed rate/cost/percent (or value+percent for mixed summary). */
-export function formatCachedInputColumn(
-	data: ModelTokenData,
-	componentCosts?: ComponentCosts,
-): string {
-	const totalInput = totalInputTokens(data);
-	const cachedPct = formatPercent(data.cacheReadTokens, totalInput);
-
-	if (componentCosts == null) {
-		return `${formatNumber(data.cacheReadTokens)}\n${cachedPct}`;
-	}
-
-	const listedRate = formatListedRateWithAverage(
-		componentCosts.cacheReadListRatePerMillion,
-		componentCosts.cacheReadCost,
-		data.cacheReadTokens,
-	);
-
-	return `${formatNumber(data.cacheReadTokens)}\n$${listedRate}/M→${pc.green(formatCurrencyValue(componentCosts.cacheReadCost))} ${cachedPct}`;
-}
+// ---------------------------------------------------------------------------
+// Column format functions
+// ---------------------------------------------------------------------------
 
 /** Input Total: value + real effective rate/cost. */
 export function formatInputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
@@ -377,62 +305,14 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 		return formatNumber(totalInput);
 	}
 
-	const totalInputCost = componentCosts.uncachedInputCost + componentCosts.cacheReadCost;
+	const totalInputCost =
+		tierTotalCost(componentCosts.baseInput) +
+		tierTotalCost(componentCosts.cacheCreate) +
+		tierTotalCost(componentCosts.cacheRead);
 	const realRate = formatRateNumber(totalInputCost, totalInput);
 	return `${formatNumber(totalInput)}\n$${realRate}/M→${pc.green(formatCurrencyValue(totalInputCost))}`;
 }
 
-/** Output/Reasoning: value + real effective rate/cost. */
-export function formatOutputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
-	const outputTokenDisplay = formatOutputValueWithReasoningPct(
-		data.outputTokens,
-		data.reasoningTokens,
-	);
 
-	if (componentCosts == null) {
-		return outputTokenDisplay;
-	}
 
-	const outputTotalTokens = data.outputTokens + data.reasoningTokens;
-	if (outputTotalTokens <= 0) {
-		return outputTokenDisplay;
-	}
 
-	const realRate = formatRateNumber(componentCosts.outputCost, outputTotalTokens);
-	return `${outputTokenDisplay}\n$${realRate}/M→${pc.green(formatCurrencyValue(componentCosts.outputCost))}`;
-}
-
-export function formatOutputValueWithReasoningPct(
-	outputTokens: number,
-	reasoningTokens: number,
-): string {
-	if (reasoningTokens <= 0) {
-		return formatNumber(outputTokens);
-	}
-
-	const reasoningPct = formatPercent(reasoningTokens, outputTokens + reasoningTokens);
-	return `${formatNumber(outputTokens)} ${reasoningPct}`;
-}
-
-/** Aggregate (mixed-model) Input Cached column: value + percent only. */
-export function formatAggregateCachedInputColumn(
-	inputTokens: number,
-	cacheCreationTokens: number,
-	cacheReadTokens: number,
-): string {
-	const totalInput = inputTokens + cacheCreationTokens + cacheReadTokens;
-	const cachedPct = formatPercent(cacheReadTokens, totalInput);
-	return `${formatNumber(cacheReadTokens)}\n${cachedPct}`;
-}
-
-/** Aggregate (mixed-model) Input Uncached column: value + percent only. */
-export function formatAggregateUncachedInputColumn(
-	inputTokens: number,
-	cacheCreationTokens: number,
-	cacheReadTokens: number,
-): string {
-	const uncachedInput = inputTokens + cacheCreationTokens;
-	const totalInput = uncachedInput + cacheReadTokens;
-	const uncachedPct = formatPercent(uncachedInput, totalInput);
-	return `${formatNumber(uncachedInput)}\n${uncachedPct}`;
-}

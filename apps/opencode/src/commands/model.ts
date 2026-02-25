@@ -1,25 +1,12 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
-import {
-	addEmptySeparatorRow,
-	formatCurrency,
-	formatNumber,
-	ResponsiveTable,
-} from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
 import {
 	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
-	formatAggregateCachedInputColumn,
-	formatAggregateUncachedInputColumn,
-	formatCachedInputColumn,
-	formatInputColumn,
-	formatOutputColumn,
-	formatOutputValueWithReasoningPct,
-	formatUncachedInputColumn,
 	totalInputTokens,
 } from '../cost-utils.ts';
 import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
@@ -27,8 +14,13 @@ import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filte
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
-
-const TABLE_COLUMN_COUNT = 6;
+import {
+	buildAggregateSummaryRow,
+	buildModelBreakdownRow,
+	createUsageTable,
+	isCompactTable,
+	remapTokensForAggregate,
+} from '../usage-table.ts';
 const MAX_SESSION_TITLE_CHARS = 40;
 
 function truncateSessionTitle(title: string): string {
@@ -175,11 +167,12 @@ export const modelCommand = define({
 
 			for (const entry of modelEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
-				inputTokens += entry.usage.inputTokens;
+				const mapped = remapTokensForAggregate(entry.usage);
+				inputTokens += mapped.base;
 				outputTokens += entry.usage.outputTokens;
 				reasoningTokens += entry.usage.reasoningTokens;
-				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
-				cacheReadTokens += entry.usage.cacheReadInputTokens;
+				cacheCreationTokens += mapped.cacheCreate;
+				cacheReadTokens += mapped.cacheRead;
 				totalCost += cost;
 
 				const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -332,27 +325,25 @@ export const modelCommand = define({
 		// eslint-disable-next-line no-console
 		console.log('\n📊 OpenCode Token Usage Report - By Model\n');
 
-		const table: ResponsiveTable = new ResponsiveTable({
-			head: ['Model', 'Input', 'Output/Reasoning%', 'Cache Create', 'Cache Read', 'Cost (USD)'],
-			colAligns: ['left', 'right', 'right', 'right', 'right', 'right'],
-			compactHead: ['Model', 'Input', 'Output/Reasoning%', 'Cost (USD)'],
-			compactColAligns: ['left', 'right', 'right', 'right'],
-			compactThreshold: 80,
+		const table = createUsageTable({
+			firstColumnName: 'Model',
+			hasModelsColumn: false,
 			forceCompact: Boolean(ctx.values.compact),
-			style: { head: ['cyan'] },
 		});
+		const compact = isCompactTable(table);
 
 		for (const data of modelData) {
-			table.push([
-				pc.bold(formatModelLabelForTable(data.model)),
-				formatInputColumn(data, data.componentCosts),
-				formatOutputColumn(data, data.componentCosts),
-				formatUncachedInputColumn(data, data.componentCosts),
-				formatCachedInputColumn(data, data.componentCosts),
-				pc.green(formatCurrency(data.totalCost)),
-			]);
+			// Model summary rows use per-model costs (not aggregate)
+			table.push(
+				buildModelBreakdownRow(
+					pc.bold(formatModelLabelForTable(data.model)),
+					null,
+					data,
+					data.componentCosts,
+				),
+			);
 
-			if (showBreakdown) {
+			if (showBreakdown && !compact) {
 				for (const projectData of data.projectBreakdown) {
 					const sessionCount = projectData.sessions.length;
 					if (sessionCount === 1) {
@@ -365,14 +356,14 @@ export const modelCommand = define({
 								fetcher,
 							);
 
-							table.push([
-								`  ▸ ${projectData.projectName}/${truncatedSessionTitle}`,
-								formatInputColumn(sessionData, sessionComponentCosts),
-								formatOutputColumn(sessionData, sessionComponentCosts),
-								formatUncachedInputColumn(sessionData, sessionComponentCosts),
-								formatCachedInputColumn(sessionData, sessionComponentCosts),
-								pc.green(formatCurrency(sessionData.totalCost)),
-							]);
+							table.push(
+								buildModelBreakdownRow(
+									`  ▸ ${projectData.projectName}/${truncatedSessionTitle}`,
+									null,
+									sessionData,
+									sessionComponentCosts,
+								),
+							);
 						}
 						continue;
 					}
@@ -383,14 +374,14 @@ export const modelCommand = define({
 						fetcher,
 					);
 
-					table.push([
-						`  ▸ ${projectData.projectName}`,
-						formatInputColumn(projectData, projectComponentCosts),
-						formatOutputColumn(projectData, projectComponentCosts),
-						formatUncachedInputColumn(projectData, projectComponentCosts),
-						formatCachedInputColumn(projectData, projectComponentCosts),
-						pc.green(formatCurrency(projectData.totalCost)),
-					]);
+					table.push(
+						buildModelBreakdownRow(
+							`  ▸ ${projectData.projectName}`,
+							null,
+							projectData,
+							projectComponentCosts,
+						),
+					);
 
 					for (const sessionData of projectData.sessions) {
 						const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
@@ -400,47 +391,27 @@ export const modelCommand = define({
 							fetcher,
 						);
 
-						table.push([
-							`    - ${truncatedSessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
-							formatInputColumn(sessionData, sessionComponentCosts),
-							formatOutputColumn(sessionData, sessionComponentCosts),
-							formatUncachedInputColumn(sessionData, sessionComponentCosts),
-							formatCachedInputColumn(sessionData, sessionComponentCosts),
-							pc.green(formatCurrency(sessionData.totalCost)),
-						]);
+						table.push(
+							buildModelBreakdownRow(
+								`    - ${truncatedSessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
+								null,
+								sessionData,
+								sessionComponentCosts,
+							),
+						);
 					}
 				}
 			}
 		}
 
-		addEmptySeparatorRow(table, TABLE_COLUMN_COUNT);
-
-		const totalInput = totalInputTokens(totals);
-		table.push([
-			pc.yellow('Total'),
-			pc.yellow(formatNumber(totalInput)),
-			pc.yellow(formatOutputValueWithReasoningPct(totals.outputTokens, totals.reasoningTokens)),
-			pc.yellow(
-				formatAggregateUncachedInputColumn(
-					totals.inputTokens,
-					totals.cacheCreationTokens,
-					totals.cacheReadTokens,
-				),
-			),
-			pc.yellow(
-				formatAggregateCachedInputColumn(
-					totals.inputTokens,
-					totals.cacheCreationTokens,
-					totals.cacheReadTokens,
-				),
-			),
-			pc.yellow(pc.green(formatCurrency(totals.totalCost))),
-		]);
+		table.push(
+			buildAggregateSummaryRow('Total', null, totals, { yellow: true, compact }),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());
 
-		if (table.isCompactMode()) {
+		if (compact) {
 			// eslint-disable-next-line no-console
 			console.log('\nRunning in Compact Mode');
 			// eslint-disable-next-line no-console
