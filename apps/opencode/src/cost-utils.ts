@@ -411,7 +411,7 @@ export function formatOutputValueWithReasoningPct(
 	}
 
 	const reasoningPct = formatPercent(reasoningTokens, outputTokens + reasoningTokens);
-	return `${formatNumber(outputTokens)} ${reasoningPct}r`;
+	return `${formatNumber(outputTokens)} ${reasoningPct}`;
 }
 
 /** Aggregate (mixed-model) Input Cached column: value + percent only. */
