@@ -5,7 +5,11 @@ import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
-import { formatReportSourceLabel, resolveBreakdownDimensions } from '../breakdown.ts';
+import {
+	formatReportSourceLabel,
+	isDisplayedZeroCost,
+	resolveBreakdownDimensions,
+} from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
@@ -86,6 +90,10 @@ export const sessionCommand = define({
 			type: 'string',
 			description: 'Comma-separated breakdowns (model) or none',
 		},
+		'skip-zero': {
+			type: 'boolean',
+			description: 'Hide rows whose cost rounds to $0.00',
+		},
 		subagents: {
 			type: 'boolean',
 			description: 'Show subagent sessions',
@@ -93,6 +101,7 @@ export const sessionCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const skipZero = ctx.values['skip-zero'] === true;
 		const showSubagents = ctx.values.subagents === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
@@ -249,13 +258,26 @@ export const sessionCommand = define({
 			(a, b) => b.totalCost - a.totalCost || b.lastActivity.getTime() - a.lastActivity.getTime(),
 		);
 
+		const visibleSessionData = skipZero
+			? sessionData.filter((session) => !isDisplayedZeroCost(session.totalCost))
+			: sessionData;
+
+		if (visibleSessionData.length === 0) {
+			const output = jsonOutput
+				? JSON.stringify({ source, sessions: [], totals: null })
+				: 'No usage rows found after applying --skip-zero.';
+			// eslint-disable-next-line no-console
+			console.log(output);
+			return;
+		}
+
 		const totals = {
-			inputTokens: sessionData.reduce((sum, s) => sum + s.inputTokens, 0),
-			outputTokens: sessionData.reduce((sum, s) => sum + s.outputTokens, 0),
-			reasoningTokens: sessionData.reduce((sum, s) => sum + s.reasoningTokens, 0),
-			cacheCreationTokens: sessionData.reduce((sum, s) => sum + s.cacheCreationTokens, 0),
-			cacheReadTokens: sessionData.reduce((sum, s) => sum + s.cacheReadTokens, 0),
-			totalCost: sessionData.reduce((sum, s) => sum + s.totalCost, 0),
+			inputTokens: visibleSessionData.reduce((sum, s) => sum + s.inputTokens, 0),
+			outputTokens: visibleSessionData.reduce((sum, s) => sum + s.outputTokens, 0),
+			reasoningTokens: visibleSessionData.reduce((sum, s) => sum + s.reasoningTokens, 0),
+			cacheCreationTokens: visibleSessionData.reduce((sum, s) => sum + s.cacheCreationTokens, 0),
+			cacheReadTokens: visibleSessionData.reduce((sum, s) => sum + s.cacheReadTokens, 0),
+			totalCost: visibleSessionData.reduce((sum, s) => sum + s.totalCost, 0),
 		};
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -263,7 +285,7 @@ export const sessionCommand = define({
 				JSON.stringify(
 					{
 						source,
-						sessions: sessionData,
+						sessions: visibleSessionData,
 						totals,
 					},
 					null,
@@ -285,7 +307,14 @@ export const sessionCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		const sessionsByParent = groupBy(sessionData, (s) => s.parentID ?? 'root');
+		const visibleSessionIDs = new Set(visibleSessionData.map((session) => session.sessionID));
+		const sessionsByParent = groupBy(visibleSessionData, (session) => {
+			if (session.parentID == null || !visibleSessionIDs.has(session.parentID)) {
+				return 'root';
+			}
+
+			return session.parentID;
+		});
 		const parentSessions = [...(sessionsByParent.root ?? [])].sort(
 			(a, b) => b.totalCost - a.totalCost || b.lastActivity.getTime() - a.lastActivity.getTime(),
 		);
@@ -313,6 +342,10 @@ export const sessionCommand = define({
 				);
 
 				for (const [model, metrics] of sortedParentModels) {
+					if (skipZero && isDisplayedZeroCost(metrics.totalCost)) {
+						continue;
+					}
+
 					const modelEntries = breakdownEntriesBySession[parentSession.sessionID]?.[model] ?? [];
 					const pricingModel = modelEntries[0]?.model ?? model;
 					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
@@ -354,6 +387,10 @@ export const sessionCommand = define({
 						);
 
 						for (const [model, metrics] of sortedSubModels) {
+							if (skipZero && isDisplayedZeroCost(metrics.totalCost)) {
+								continue;
+							}
+
 							const modelEntries = breakdownEntriesBySession[subSession.sessionID]?.[model] ?? [];
 							const pricingModel = modelEntries[0]?.model ?? model;
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
