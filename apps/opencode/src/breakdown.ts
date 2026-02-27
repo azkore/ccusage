@@ -1,4 +1,4 @@
-export type BreakdownDimension = 'source' | 'model' | 'project' | 'session';
+export type BreakdownDimension = 'source' | 'provider' | 'model' | 'project' | 'session';
 
 export function resolveBreakdownDimensions(args: {
 	full: boolean;

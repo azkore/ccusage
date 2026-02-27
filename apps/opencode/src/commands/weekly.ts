@@ -103,7 +103,7 @@ export const weeklyCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,model) or none',
+			description: 'Comma-separated breakdowns (source,provider,model) or none',
 		},
 	},
 	async run(ctx) {
@@ -117,15 +117,17 @@ export const weeklyCommand = define({
 		const source = parseUsageSource(sourceInput);
 		const breakdownInput =
 			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
-		const availableBreakdowns: Array<'source' | 'model'> =
-			source === 'all' ? ['source', 'model'] : ['model'];
+		const availableBreakdowns: Array<'source' | 'provider' | 'model'> =
+			source === 'all' ? ['source', 'provider', 'model'] : ['provider', 'model'];
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
 			available: availableBreakdowns,
 		});
-		const showSourceBreakdown = breakdowns.includes('source');
-		const showModelBreakdown = breakdowns.includes('model');
+		const showBreakdown = breakdowns.length > 0;
+		const includeSource = breakdowns.includes('source');
+		const includeProvider = breakdowns.includes('provider');
+		const includeModel = breakdowns.includes('model');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -161,6 +163,7 @@ export const weeklyCommand = define({
 			filteredEntries,
 			showProviders ? 'always' : 'never',
 		);
+		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
 
 		const entriesByWeek = groupBy(filteredEntries, (entry) => getISOWeek(entry.timestamp));
 
@@ -175,7 +178,6 @@ export const weeklyCommand = define({
 			modelsUsed: string[];
 			modelBreakdown: Record<string, ModelTokenData>;
 		}> = [];
-		const breakdownEntriesByWeek: Record<string, Record<string, LoadedUsageEntry[]>> = {};
 		const entryCostMap = new Map<LoadedUsageEntry, number>();
 
 		const aggregateEntries = (groupEntries: LoadedUsageEntry[]) => {
@@ -250,7 +252,6 @@ export const weeklyCommand = define({
 			let totalCost = 0;
 			const modelsSet = new Set<string>();
 			const modelBreakdown: Record<string, ModelTokenData> = {};
-			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
 
 			for (const entry of weekEntries) {
 				const modelLabel = modelLabelForEntry(entry);
@@ -283,13 +284,6 @@ export const weeklyCommand = define({
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
-
-				let modelEntries = modelEntriesByModel[modelLabel];
-				if (modelEntries == null) {
-					modelEntries = [];
-					modelEntriesByModel[modelLabel] = modelEntries;
-				}
-				modelEntries.push(entry);
 			}
 
 			weeklyData.push({
@@ -303,7 +297,6 @@ export const weeklyCommand = define({
 				modelsUsed: Array.from(modelsSet),
 				modelBreakdown,
 			});
-			breakdownEntriesByWeek[week] = modelEntriesByModel;
 		}
 
 		weeklyData.sort((a, b) => a.week.localeCompare(b.week));
@@ -344,68 +337,63 @@ export const weeklyCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		const pushModelBreakdownRows = async (
-			modelBreakdown: Record<string, ModelTokenData>,
-			entriesByModel: Record<string, LoadedUsageEntry[]>,
-		) => {
-			const sortedModels = Object.entries(modelBreakdown).sort(
-				(a, b) => b[1].totalCost - a[1].totalCost,
-			);
-
-			for (const [model, metrics] of sortedModels) {
-				const modelEntries = entriesByModel[model] ?? [];
-				const pricingModel = modelEntries[0]?.model ?? model;
-				const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
-					modelEntries,
-					pricingModel,
-					fetcher,
-				);
-
-				table.push(
-					buildModelBreakdownRow('', formatModelLabelForTable(model), metrics, componentCosts),
-				);
-			}
-		};
-
 		for (const data of weeklyData) {
 			table.push(
 				buildAggregateSummaryRow(data.week, 'Weekly Total', data, { bold: true, compact }),
 			);
 
-			if (!compact && (showSourceBreakdown || showModelBreakdown)) {
+			if (!compact && showBreakdown) {
 				const weekEntries = entriesByWeek[data.week] ?? [];
-
-				if (showSourceBreakdown) {
-					const entriesBySource = groupBy(weekEntries, (entry) => entry.source);
-					const sourceRows = Object.entries(entriesBySource)
-						.map(([entrySource, sourceEntries]) => ({
-							entrySource: entrySource as 'opencode' | 'claude',
-							aggregate: aggregateEntries(sourceEntries),
-						}))
-						.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
-
-					for (const sourceRow of sourceRows) {
-						table.push(
-							buildAggregateSummaryRow(
-								'',
-								`${formatSourceLabel(sourceRow.entrySource)} Total`,
-								sourceRow.aggregate.totals,
-								{ compact },
-							),
+				const groupedEntries = groupBy(weekEntries, (entry) => {
+					const keyParts: string[] = [];
+					if (includeSource) {
+						keyParts.push(formatSourceLabel(entry.source));
+					}
+					if (includeProvider) {
+						keyParts.push(entry.provider);
+					}
+					if (includeModel) {
+						keyParts.push(
+							includeProvider ? plainModelLabelForEntry(entry) : modelLabelForEntry(entry),
 						);
+					}
 
-						if (showModelBreakdown) {
-							await pushModelBreakdownRows(
-								sourceRow.aggregate.modelBreakdown,
-								sourceRow.aggregate.modelEntriesByModel,
+					return keyParts.join('\u001F');
+				});
+
+				const breakdownRows = Object.entries(groupedEntries)
+					.map(([groupKey, groupRows]) => ({
+						label: groupKey.split('\u001F').join(' / '),
+						entries: groupRows,
+						aggregate: aggregateEntries(groupRows),
+					}))
+					.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
+
+				for (const row of breakdownRows) {
+					const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
+					if (includeModel && modelMetricsValues.length === 1) {
+						const modelMetrics = modelMetricsValues[0];
+						if (modelMetrics != null) {
+							const pricingModel = row.entries[0]?.model ?? row.label;
+							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+								row.entries,
+								pricingModel,
+								fetcher,
 							);
+
+							table.push(
+								buildModelBreakdownRow(
+									'',
+									formatModelLabelForTable(row.label),
+									modelMetrics,
+									componentCosts,
+								),
+							);
+							continue;
 						}
 					}
-				} else if (showModelBreakdown) {
-					await pushModelBreakdownRows(
-						data.modelBreakdown,
-						breakdownEntriesByWeek[data.week] ?? {},
-					);
+
+					table.push(buildAggregateSummaryRow('', row.label, row.aggregate.totals, { compact }));
 				}
 			}
 		}
