@@ -1,3 +1,5 @@
+import { resolveModelAlias } from './model-alias.ts';
+
 export type BreakdownDimension = 'source' | 'provider' | 'model' | 'project' | 'session';
 
 export function resolveBreakdownDimensions(args: {
@@ -57,12 +59,15 @@ export function formatReportSourceLabel(source: 'opencode' | 'claude' | 'all'): 
 }
 
 export function formatBreakdownLabelForTable(label: string): string {
-	const slashIndex = label.lastIndexOf('/');
-	if (slashIndex <= 0 || slashIndex >= label.length - 1) {
-		return label;
+	const resolvedAlias = resolveModelAlias(label);
+	const plainLabel = resolvedAlias.label;
+	const slashIndex = plainLabel.lastIndexOf('/');
+	if (slashIndex <= 0 || slashIndex >= plainLabel.length - 1) {
+		return resolvedAlias.colorizer?.(plainLabel) ?? plainLabel;
 	}
 
-	return `${label.slice(0, slashIndex + 1)}\n${label.slice(slashIndex + 1)}`;
+	const formattedLabel = `${plainLabel.slice(0, slashIndex + 1)}\n${plainLabel.slice(slashIndex + 1)}`;
+	return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
 }
 
 export function isDisplayedZeroCost(totalCost: number): boolean {

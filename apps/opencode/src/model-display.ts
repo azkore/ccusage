@@ -1,4 +1,5 @@
 import type { LoadedUsageEntry } from './data-loader.ts';
+import { applyModelAlias, resolveModelAlias } from './model-alias.ts';
 
 export type ProviderDisplayMode = 'always' | 'never' | 'auto';
 
@@ -54,15 +55,23 @@ export function createModelLabelResolver(
 }
 
 export function formatModelLabelForTable(modelLabel: string): string {
-	const slashIndex = modelLabel.indexOf('/');
+	const resolvedAlias = resolveModelAlias(modelLabel);
+	const plainLabel = resolvedAlias.label;
+	const slashIndex = plainLabel.indexOf('/');
 	if (slashIndex <= 0) {
-		const dateLikeSuffix = modelLabel.match(/-(\d{6,})$/);
+		const dateLikeSuffix = plainLabel.match(/-(\d{6,})$/);
 		if (dateLikeSuffix == null || dateLikeSuffix.index == null) {
-			return modelLabel;
+			return resolvedAlias.colorizer?.(plainLabel) ?? plainLabel;
 		}
 
-		return `${modelLabel.slice(0, dateLikeSuffix.index + 1)}\n${modelLabel.slice(dateLikeSuffix.index + 1)}`;
+		const formattedLabel = `${plainLabel.slice(0, dateLikeSuffix.index + 1)}\n${plainLabel.slice(dateLikeSuffix.index + 1)}`;
+		return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
 	}
 
-	return `${modelLabel.slice(0, slashIndex + 1)}\n${modelLabel.slice(slashIndex + 1)}`;
+	const formattedLabel = `${plainLabel.slice(0, slashIndex + 1)}\n${plainLabel.slice(slashIndex + 1)}`;
+	return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
+}
+
+export function applyModelAliasForDisplay(modelLabel: string): string {
+	return applyModelAlias(modelLabel);
 }

@@ -15,7 +15,11 @@ import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
-import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
+import {
+	applyModelAliasForDisplay,
+	createModelLabelResolver,
+	formatModelLabelForTable,
+} from '../model-display.ts';
 import {
 	buildAggregateSummaryRow,
 	buildModelBreakdownRow,
@@ -330,7 +334,7 @@ export const sessionCommand = define({
 			table.push(
 				buildAggregateSummaryRow(
 					parentSessionCell,
-					formatModelsDisplayMultiline(parentSession.modelsUsed),
+					formatModelsDisplayMultiline(parentSession.modelsUsed.map(applyModelAliasForDisplay)),
 					parentSession,
 					{ compact },
 				),
@@ -375,7 +379,7 @@ export const sessionCommand = define({
 					table.push(
 						buildAggregateSummaryRow(
 							subSessionCell,
-							formatModelsDisplayMultiline(subSession.modelsUsed),
+							formatModelsDisplayMultiline(subSession.modelsUsed.map(applyModelAliasForDisplay)),
 							subSession,
 							{ compact },
 						),

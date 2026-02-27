@@ -14,7 +14,11 @@ import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
-import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
+import {
+	applyModelAliasForDisplay,
+	createModelLabelResolver,
+	formatModelLabelForTable,
+} from '../model-display.ts';
 import {
 	buildAggregateSummaryRow,
 	buildModelBreakdownRow,
@@ -413,7 +417,14 @@ export const weeklyCommand = define({
 						}
 					}
 
-					table.push(buildAggregateSummaryRow('', row.label, row.aggregate.totals, { compact }));
+					table.push(
+						buildAggregateSummaryRow(
+							'',
+							applyModelAliasForDisplay(row.label),
+							row.aggregate.totals,
+							{ compact },
+						),
+					);
 				}
 			}
 		}
