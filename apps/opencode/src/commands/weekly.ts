@@ -6,6 +6,7 @@ import { define } from 'gunshi';
 import {
 	formatBreakdownLabelForTable,
 	formatReportSourceLabel,
+	isDisplayedZeroCost,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
@@ -105,9 +106,14 @@ export const weeklyCommand = define({
 			type: 'string',
 			description: 'Comma-separated breakdowns (source,provider,model) or none',
 		},
+		'skip-zero': {
+			type: 'boolean',
+			description: 'Hide rows whose cost rounds to $0.00',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const skipZero = ctx.values['skip-zero'] === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
@@ -300,14 +306,26 @@ export const weeklyCommand = define({
 		}
 
 		weeklyData.sort((a, b) => a.week.localeCompare(b.week));
+		const visibleWeeklyData = skipZero
+			? weeklyData.filter((data) => !isDisplayedZeroCost(data.totalCost))
+			: weeklyData;
+
+		if (visibleWeeklyData.length === 0) {
+			const output = jsonOutput
+				? JSON.stringify({ source, weekly: [], totals: null })
+				: 'No usage rows found after applying --skip-zero.';
+			// eslint-disable-next-line no-console
+			console.log(output);
+			return;
+		}
 
 		const totals = {
-			inputTokens: weeklyData.reduce((sum, d) => sum + d.inputTokens, 0),
-			outputTokens: weeklyData.reduce((sum, d) => sum + d.outputTokens, 0),
-			reasoningTokens: weeklyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
-			cacheCreationTokens: weeklyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
-			cacheReadTokens: weeklyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
-			totalCost: weeklyData.reduce((sum, d) => sum + d.totalCost, 0),
+			inputTokens: visibleWeeklyData.reduce((sum, d) => sum + d.inputTokens, 0),
+			outputTokens: visibleWeeklyData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: visibleWeeklyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
+			cacheCreationTokens: visibleWeeklyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
+			cacheReadTokens: visibleWeeklyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
+			totalCost: visibleWeeklyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -315,7 +333,7 @@ export const weeklyCommand = define({
 				JSON.stringify(
 					{
 						source,
-						weekly: weeklyData,
+						weekly: visibleWeeklyData,
 						totals,
 					},
 					null,
@@ -337,7 +355,7 @@ export const weeklyCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		for (const data of weeklyData) {
+		for (const data of visibleWeeklyData) {
 			table.push(
 				buildAggregateSummaryRow(data.week, 'Weekly Total', data, { bold: true, compact }),
 			);
@@ -372,6 +390,7 @@ export const weeklyCommand = define({
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
+					.filter((row) => !skipZero || !isDisplayedZeroCost(row.aggregate.totals.totalCost))
 					.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
 
 				for (const row of breakdownRows) {

@@ -6,6 +6,7 @@ import { define } from 'gunshi';
 import {
 	formatBreakdownLabelForTable,
 	formatReportSourceLabel,
+	isDisplayedZeroCost,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
@@ -84,9 +85,14 @@ export const dailyCommand = define({
 			type: 'string',
 			description: 'Comma-separated breakdowns (source,provider,model) or none',
 		},
+		'skip-zero': {
+			type: 'boolean',
+			description: 'Hide rows whose cost rounds to $0.00',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const skipZero = ctx.values['skip-zero'] === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
@@ -279,14 +285,26 @@ export const dailyCommand = define({
 		}
 
 		dailyData.sort((a, b) => a.date.localeCompare(b.date));
+		const visibleDailyData = skipZero
+			? dailyData.filter((data) => !isDisplayedZeroCost(data.totalCost))
+			: dailyData;
+
+		if (visibleDailyData.length === 0) {
+			const output = jsonOutput
+				? JSON.stringify({ source, daily: [], totals: null })
+				: 'No usage rows found after applying --skip-zero.';
+			// eslint-disable-next-line no-console
+			console.log(output);
+			return;
+		}
 
 		const totals = {
-			inputTokens: dailyData.reduce((sum, d) => sum + d.inputTokens, 0),
-			outputTokens: dailyData.reduce((sum, d) => sum + d.outputTokens, 0),
-			reasoningTokens: dailyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
-			cacheCreationTokens: dailyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
-			cacheReadTokens: dailyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
-			totalCost: dailyData.reduce((sum, d) => sum + d.totalCost, 0),
+			inputTokens: visibleDailyData.reduce((sum, d) => sum + d.inputTokens, 0),
+			outputTokens: visibleDailyData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: visibleDailyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
+			cacheCreationTokens: visibleDailyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
+			cacheReadTokens: visibleDailyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
+			totalCost: visibleDailyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -294,7 +312,7 @@ export const dailyCommand = define({
 				JSON.stringify(
 					{
 						source,
-						daily: dailyData,
+						daily: visibleDailyData,
 						totals,
 					},
 					null,
@@ -316,7 +334,7 @@ export const dailyCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		for (const data of dailyData) {
+		for (const data of visibleDailyData) {
 			// Summary Row (no $/M rates — mixed models)
 			table.push(buildAggregateSummaryRow(data.date, 'Daily Total', data, { bold: true, compact }));
 
@@ -350,6 +368,7 @@ export const dailyCommand = define({
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
+					.filter((row) => !skipZero || !isDisplayedZeroCost(row.aggregate.totals.totalCost))
 					.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
 
 				for (const row of breakdownRows) {

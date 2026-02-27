@@ -64,3 +64,7 @@ export function formatBreakdownLabelForTable(label: string): string {
 
 	return `${label.slice(0, slashIndex + 1)}\n${label.slice(slashIndex + 1)}`;
 }
+
+export function isDisplayedZeroCost(totalCost: number): boolean {
+	return Math.abs(totalCost) < 0.005;
+}

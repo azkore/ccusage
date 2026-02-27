@@ -6,6 +6,7 @@ import { define } from 'gunshi';
 import {
 	formatBreakdownLabelForTable,
 	formatReportSourceLabel,
+	isDisplayedZeroCost,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
@@ -84,9 +85,14 @@ export const monthlyCommand = define({
 			type: 'string',
 			description: 'Comma-separated breakdowns (source,provider,model) or none',
 		},
+		'skip-zero': {
+			type: 'boolean',
+			description: 'Hide rows whose cost rounds to $0.00',
+		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
+		const skipZero = ctx.values['skip-zero'] === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
@@ -281,14 +287,26 @@ export const monthlyCommand = define({
 		}
 
 		monthlyData.sort((a, b) => a.month.localeCompare(b.month));
+		const visibleMonthlyData = skipZero
+			? monthlyData.filter((data) => !isDisplayedZeroCost(data.totalCost))
+			: monthlyData;
+
+		if (visibleMonthlyData.length === 0) {
+			const output = jsonOutput
+				? JSON.stringify({ source, monthly: [], totals: null })
+				: 'No usage rows found after applying --skip-zero.';
+			// eslint-disable-next-line no-console
+			console.log(output);
+			return;
+		}
 
 		const totals = {
-			inputTokens: monthlyData.reduce((sum, d) => sum + d.inputTokens, 0),
-			outputTokens: monthlyData.reduce((sum, d) => sum + d.outputTokens, 0),
-			reasoningTokens: monthlyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
-			cacheCreationTokens: monthlyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
-			cacheReadTokens: monthlyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
-			totalCost: monthlyData.reduce((sum, d) => sum + d.totalCost, 0),
+			inputTokens: visibleMonthlyData.reduce((sum, d) => sum + d.inputTokens, 0),
+			outputTokens: visibleMonthlyData.reduce((sum, d) => sum + d.outputTokens, 0),
+			reasoningTokens: visibleMonthlyData.reduce((sum, d) => sum + d.reasoningTokens, 0),
+			cacheCreationTokens: visibleMonthlyData.reduce((sum, d) => sum + d.cacheCreationTokens, 0),
+			cacheReadTokens: visibleMonthlyData.reduce((sum, d) => sum + d.cacheReadTokens, 0),
+			totalCost: visibleMonthlyData.reduce((sum, d) => sum + d.totalCost, 0),
 		};
 		if (jsonOutput) {
 			// eslint-disable-next-line no-console
@@ -296,7 +314,7 @@ export const monthlyCommand = define({
 				JSON.stringify(
 					{
 						source,
-						monthly: monthlyData,
+						monthly: visibleMonthlyData,
 						totals,
 					},
 					null,
@@ -318,7 +336,7 @@ export const monthlyCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		for (const data of monthlyData) {
+		for (const data of visibleMonthlyData) {
 			table.push(
 				buildAggregateSummaryRow(data.month, 'Monthly Total', data, { bold: true, compact }),
 			);
@@ -353,6 +371,7 @@ export const monthlyCommand = define({
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
+					.filter((row) => !skipZero || !isDisplayedZeroCost(row.aggregate.totals.totalCost))
 					.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
 
 				for (const row of breakdownRows) {
