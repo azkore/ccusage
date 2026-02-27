@@ -4,7 +4,7 @@ import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
-import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
+import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import {
 	filterEntriesByDateRange,
 	formatLocalDateKey,
@@ -45,6 +45,11 @@ export const dailyCommand = define({
 			short: 'P',
 			description: 'Show provider prefixes in model names',
 		},
+		source: {
+			type: 'string',
+			short: 's',
+			description: 'Data source: opencode, claude, or all (default: all)',
+		},
 		since: {
 			type: 'string',
 			description: 'Filter from date/time',
@@ -78,6 +83,9 @@ export const dailyCommand = define({
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const modelInput = typeof ctx.values.model === 'string' ? ctx.values.model.trim() : '';
+		const sourceInput =
+			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
+		const source = parseUsageSource(sourceInput);
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -87,10 +95,7 @@ export const dailyCommand = define({
 			lastInput,
 		});
 
-		const [entries, sessionMetadataMap] = await Promise.all([
-			loadOpenCodeMessages(),
-			loadOpenCodeSessions(),
-		]);
+		const { entries, sessionMetadataMap } = await loadUsageData(source);
 		const timeFilteredEntries = filterEntriesByDateRange(entries, sinceDate, untilDate);
 		const filteredEntries = filterEntriesBySessionProjectFilters(
 			timeFilteredEntries,
@@ -104,8 +109,8 @@ export const dailyCommand = define({
 
 		if (filteredEntries.length === 0) {
 			const output = jsonOutput
-				? JSON.stringify({ daily: [], totals: null })
-				: 'No OpenCode usage data found.';
+				? JSON.stringify({ source, daily: [], totals: null })
+				: 'No usage data found.';
 			// eslint-disable-next-line no-console
 			console.log(output);
 			return;
@@ -211,6 +216,7 @@ export const dailyCommand = define({
 			console.log(
 				JSON.stringify(
 					{
+						source,
 						daily: dailyData,
 						totals,
 					},
@@ -221,8 +227,11 @@ export const dailyCommand = define({
 			return;
 		}
 
+		const sourceLabel =
+			source === 'all' ? 'All Sources' : source === 'claude' ? 'Claude' : 'OpenCode';
+
 		// eslint-disable-next-line no-console
-		console.log('\n📊 OpenCode Token Usage Report - Daily\n');
+		console.log(`\n📊 ${sourceLabel} Token Usage Report - Daily\n`);
 
 		const table = createUsageTable({
 			firstColumnName: 'Date',

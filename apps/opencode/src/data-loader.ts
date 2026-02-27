@@ -5,16 +5,22 @@
  * ~/.local/share/opencode/opencode.db
  */
 
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline';
 import { isDirectorySync } from 'path-type';
+import { glob } from 'tinyglobby';
 import { logger } from './logger.ts';
 
 const DEFAULT_OPENCODE_PATH = '.local/share/opencode';
 const OPENCODE_CONFIG_DIR_ENV = 'OPENCODE_DATA_DIR';
 const OPENCODE_DB_FILENAME = 'opencode.db';
+const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
+const CLAUDE_PROJECTS_DIR_NAME = 'projects';
+const DEFAULT_CLAUDE_CONFIG_PATH = '.config/claude';
+const DEFAULT_CLAUDE_CODE_PATH = '.claude';
 const USER_HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
 const require = createRequire(import.meta.url);
 
@@ -84,6 +90,8 @@ export type LoadedUsageEntry = {
 	costUSD: number | null;
 };
 
+export type UsageSource = 'opencode' | 'claude' | 'all';
+
 export type LoadedSessionMetadata = {
 	id: string;
 	parentID: string | null;
@@ -113,6 +121,26 @@ type SessionRow = {
 	directory: string | null;
 };
 
+type ClaudeUsagePayload = {
+	input_tokens?: unknown;
+	output_tokens?: unknown;
+	cache_creation_input_tokens?: unknown;
+	cache_read_input_tokens?: unknown;
+	reasoning_tokens?: unknown;
+};
+
+type ClaudeMessagePayload = {
+	usage?: ClaudeUsagePayload;
+	model?: unknown;
+};
+
+type ClaudeLinePayload = {
+	timestamp?: unknown;
+	sessionId?: unknown;
+	message?: ClaudeMessagePayload;
+	costUSD?: unknown;
+};
+
 export function getOpenCodePath(): string | null {
 	const envPath = process.env[OPENCODE_CONFIG_DIR_ENV];
 	if (envPath != null && envPath.trim() !== '') {
@@ -128,6 +156,47 @@ export function getOpenCodePath(): string | null {
 	}
 
 	return null;
+}
+
+export function parseUsageSource(value: string | undefined): UsageSource {
+	const normalized = value?.trim().toLowerCase() ?? 'all';
+	if (normalized === '' || normalized === 'all') {
+		return 'all';
+	}
+	if (normalized === 'opencode') {
+		return 'opencode';
+	}
+	if (normalized === 'claude') {
+		return 'claude';
+	}
+	if (normalized === 'all') {
+		return 'all';
+	}
+
+	throw new Error("Invalid --source value. Use 'opencode', 'claude', or 'all'.");
+}
+
+function getClaudePaths(): string[] {
+	const envPaths = (process.env[CLAUDE_CONFIG_DIR_ENV] ?? '').trim();
+	if (envPaths !== '') {
+		const configured = envPaths
+			.split(',')
+			.map((p) => p.trim())
+			.filter((p) => p !== '')
+			.map((p) => path.resolve(p))
+			.filter((p) => isDirectorySync(path.join(p, CLAUDE_PROJECTS_DIR_NAME)));
+
+		return Array.from(new Set(configured));
+	}
+
+	const defaults = [
+		path.join(USER_HOME_DIR, DEFAULT_CLAUDE_CONFIG_PATH),
+		path.join(USER_HOME_DIR, DEFAULT_CLAUDE_CODE_PATH),
+	];
+
+	return defaults.filter((basePath) =>
+		isDirectorySync(path.join(basePath, CLAUDE_PROJECTS_DIR_NAME)),
+	);
 }
 
 function getOpenCodeDbPath(): string | null {
@@ -234,4 +303,196 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 	} finally {
 		db.close();
 	}
+}
+
+function asNumber(value: unknown): number {
+	if (typeof value !== 'number' || Number.isNaN(value)) {
+		return 0;
+	}
+
+	return value;
+}
+
+function inferProviderFromModel(model: string): string {
+	const slashIndex = model.indexOf('/');
+	if (slashIndex > 0) {
+		return model.slice(0, slashIndex).toLowerCase();
+	}
+
+	if (model.startsWith('claude-')) {
+		return 'anthropic';
+	}
+	if (model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3')) {
+		return 'openai';
+	}
+	if (model.startsWith('gemini-')) {
+		return 'google';
+	}
+
+	return 'unknown';
+}
+
+async function loadClaudeData(): Promise<{
+	entries: LoadedUsageEntry[];
+	sessionMetadataMap: Map<string, LoadedSessionMetadata>;
+}> {
+	const claudePaths = getClaudePaths();
+	if (claudePaths.length === 0) {
+		return { entries: [], sessionMetadataMap: new Map() };
+	}
+
+	const filesByProjectsDir = await Promise.all(
+		claudePaths.map(async (claudePath) => {
+			const projectsDir = path.join(claudePath, CLAUDE_PROJECTS_DIR_NAME);
+			const files = await glob('**/*.jsonl', {
+				cwd: projectsDir,
+				absolute: true,
+			}).catch(() => []);
+
+			return { projectsDir, files };
+		}),
+	);
+
+	const entries: LoadedUsageEntry[] = [];
+	const sessionMetadataMap = new Map<string, LoadedSessionMetadata>();
+
+	for (const { projectsDir, files } of filesByProjectsDir) {
+		for (const filePath of files) {
+			const relativePath = path.relative(projectsDir, filePath);
+			const segments = relativePath.split(path.sep);
+			const projectName = segments[0] != null && segments[0] !== '' ? segments[0] : 'unknown';
+			const fileSessionID = path.basename(filePath, '.jsonl');
+
+			const fileStream = createReadStream(filePath, { encoding: 'utf-8' });
+			const lineReader = createInterface({
+				input: fileStream,
+				crlfDelay: Number.POSITIVE_INFINITY,
+			});
+
+			for await (const line of lineReader) {
+				const trimmed = line.trim();
+				if (trimmed === '') {
+					continue;
+				}
+
+				try {
+					const parsed = JSON.parse(trimmed) as ClaudeLinePayload;
+					const usage = parsed.message?.usage;
+					if (usage == null) {
+						continue;
+					}
+
+					const inputTokens = asNumber(usage.input_tokens);
+					const outputTokens = asNumber(usage.output_tokens);
+					const cacheCreationInputTokens = asNumber(usage.cache_creation_input_tokens);
+					const cacheReadInputTokens = asNumber(usage.cache_read_input_tokens);
+					const reasoningTokens = asNumber(usage.reasoning_tokens);
+
+					if (
+						inputTokens === 0 &&
+						outputTokens === 0 &&
+						cacheCreationInputTokens === 0 &&
+						cacheReadInputTokens === 0 &&
+						reasoningTokens === 0
+					) {
+						continue;
+					}
+
+					const timestampValue = parsed.timestamp;
+					const timestamp =
+						typeof timestampValue === 'string' || typeof timestampValue === 'number'
+							? new Date(timestampValue)
+							: null;
+					if (timestamp == null || Number.isNaN(timestamp.getTime())) {
+						continue;
+					}
+
+					const sessionID =
+						typeof parsed.sessionId === 'string' && parsed.sessionId.trim() !== ''
+							? parsed.sessionId
+							: fileSessionID;
+					const model =
+						typeof parsed.message?.model === 'string' && parsed.message.model.trim() !== ''
+							? parsed.message.model
+							: 'unknown';
+					const provider = inferProviderFromModel(model);
+
+					if (!sessionMetadataMap.has(sessionID)) {
+						sessionMetadataMap.set(sessionID, {
+							id: sessionID,
+							parentID: null,
+							title: sessionID,
+							projectID: projectName,
+							directory: projectName,
+						});
+					}
+
+					entries.push({
+						timestamp,
+						sessionID,
+						provider,
+						usage: {
+							inputTokens,
+							outputTokens,
+							reasoningTokens,
+							cacheCreationInputTokens,
+							cacheReadInputTokens,
+						},
+						model,
+						costUSD: typeof parsed.costUSD === 'number' ? parsed.costUSD : null,
+					});
+				} catch {
+					continue;
+				}
+			}
+		}
+	}
+
+	return {
+		entries,
+		sessionMetadataMap,
+	};
+}
+
+function mergeSessionMetadataMaps(
+	...maps: Array<Map<string, LoadedSessionMetadata>>
+): Map<string, LoadedSessionMetadata> {
+	const merged = new Map<string, LoadedSessionMetadata>();
+	for (const map of maps) {
+		for (const [sessionID, metadata] of map.entries()) {
+			if (!merged.has(sessionID)) {
+				merged.set(sessionID, metadata);
+			}
+		}
+	}
+
+	return merged;
+}
+
+export async function loadUsageData(source: UsageSource): Promise<{
+	entries: LoadedUsageEntry[];
+	sessionMetadataMap: Map<string, LoadedSessionMetadata>;
+}> {
+	if (source === 'opencode') {
+		const [entries, sessionMetadataMap] = await Promise.all([
+			loadOpenCodeMessages(),
+			loadOpenCodeSessions(),
+		]);
+		return { entries, sessionMetadataMap };
+	}
+
+	if (source === 'claude') {
+		return loadClaudeData();
+	}
+
+	const [openCodeEntries, openCodeSessions, claudeData] = await Promise.all([
+		loadOpenCodeMessages(),
+		loadOpenCodeSessions(),
+		loadClaudeData(),
+	]);
+
+	return {
+		entries: [...openCodeEntries, ...claudeData.entries],
+		sessionMetadataMap: mergeSessionMetadataMaps(openCodeSessions, claudeData.sessionMetadataMap),
+	};
 }

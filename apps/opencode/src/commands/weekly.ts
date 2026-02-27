@@ -4,7 +4,7 @@ import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
-import { loadOpenCodeMessages, loadOpenCodeSessions } from '../data-loader.ts';
+import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
@@ -66,6 +66,11 @@ export const weeklyCommand = define({
 			short: 'P',
 			description: 'Show provider prefixes in model names',
 		},
+		source: {
+			type: 'string',
+			short: 's',
+			description: 'Data source: opencode, claude, or all (default: all)',
+		},
 		since: {
 			type: 'string',
 			description: 'Filter from date/time',
@@ -98,6 +103,9 @@ export const weeklyCommand = define({
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const modelInput = typeof ctx.values.model === 'string' ? ctx.values.model.trim() : '';
+		const sourceInput =
+			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
+		const source = parseUsageSource(sourceInput);
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const showBreakdown = ctx.values.full === true;
@@ -108,10 +116,7 @@ export const weeklyCommand = define({
 			lastInput,
 		});
 
-		const [entries, sessionMetadataMap] = await Promise.all([
-			loadOpenCodeMessages(),
-			loadOpenCodeSessions(),
-		]);
+		const { entries, sessionMetadataMap } = await loadUsageData(source);
 		const timeFilteredEntries = filterEntriesByDateRange(entries, sinceDate, untilDate);
 		const filteredEntries = filterEntriesBySessionProjectFilters(
 			timeFilteredEntries,
@@ -125,8 +130,8 @@ export const weeklyCommand = define({
 
 		if (filteredEntries.length === 0) {
 			const output = jsonOutput
-				? JSON.stringify({ weekly: [], totals: null })
-				: 'No OpenCode usage data found.';
+				? JSON.stringify({ source, weekly: [], totals: null })
+				: 'No usage data found.';
 			// eslint-disable-next-line no-console
 			console.log(output);
 			return;
@@ -232,6 +237,7 @@ export const weeklyCommand = define({
 			console.log(
 				JSON.stringify(
 					{
+						source,
 						weekly: weeklyData,
 						totals,
 					},
@@ -242,8 +248,11 @@ export const weeklyCommand = define({
 			return;
 		}
 
+		const sourceLabel =
+			source === 'all' ? 'All Sources' : source === 'claude' ? 'Claude' : 'OpenCode';
+
 		// eslint-disable-next-line no-console
-		console.log('\n📊 OpenCode Token Usage Report - Weekly\n');
+		console.log(`\n📊 ${sourceLabel} Token Usage Report - Weekly\n`);
 
 		const table = createUsageTable({
 			firstColumnName: 'Week',
