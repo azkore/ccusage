@@ -55,3 +55,12 @@ export function formatReportSourceLabel(source: 'opencode' | 'claude' | 'all'): 
 
 	return 'OpenCode';
 }
+
+export function formatBreakdownLabelForTable(label: string): string {
+	const slashIndex = label.lastIndexOf('/');
+	if (slashIndex <= 0 || slashIndex >= label.length - 1) {
+		return label;
+	}
+
+	return `${label.slice(0, slashIndex + 1)}\n${label.slice(slashIndex + 1)}`;
+}

@@ -4,8 +4,8 @@ import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import {
+	formatBreakdownLabelForTable,
 	formatReportSourceLabel,
-	formatSourceLabel,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
@@ -328,7 +328,7 @@ export const dailyCommand = define({
 						? plainModelLabelForEntry(entry)
 						: modelLabelForEntry(entry);
 					if (includeSource) {
-						keyParts.push(formatSourceLabel(entry.source));
+						keyParts.push(entry.source);
 					}
 					if (includeProvider && includeModel) {
 						keyParts.push(`${entry.provider}/${modelKey}`);
@@ -346,7 +346,7 @@ export const dailyCommand = define({
 
 				const breakdownRows = Object.entries(groupedEntries)
 					.map(([groupKey, groupRows]) => ({
-						label: groupKey.split('\u001F').join(' > '),
+						label: groupKey.split('\u001F').join('/'),
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
@@ -358,7 +358,9 @@ export const dailyCommand = define({
 						const modelMetrics = modelMetricsValues[0];
 						if (modelMetrics != null) {
 							const pricingModel = row.entries[0]?.model ?? row.label;
-							const rowLabel = includeSource ? row.label : formatModelLabelForTable(row.label);
+							const rowLabel = includeSource
+								? formatBreakdownLabelForTable(row.label)
+								: formatModelLabelForTable(row.label);
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
 								row.entries,
 								pricingModel,
