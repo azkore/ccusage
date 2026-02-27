@@ -346,16 +346,21 @@ export const weeklyCommand = define({
 				const weekEntries = entriesByWeek[data.week] ?? [];
 				const groupedEntries = groupBy(weekEntries, (entry) => {
 					const keyParts: string[] = [];
+					const modelKey = includeProvider
+						? plainModelLabelForEntry(entry)
+						: modelLabelForEntry(entry);
 					if (includeSource) {
 						keyParts.push(formatSourceLabel(entry.source));
 					}
-					if (includeProvider) {
-						keyParts.push(entry.provider);
-					}
-					if (includeModel) {
-						keyParts.push(
-							includeProvider ? plainModelLabelForEntry(entry) : modelLabelForEntry(entry),
-						);
+					if (includeProvider && includeModel) {
+						keyParts.push(`${entry.provider}/${modelKey}`);
+					} else {
+						if (includeProvider) {
+							keyParts.push(entry.provider);
+						}
+						if (includeModel) {
+							keyParts.push(modelKey);
+						}
 					}
 
 					return keyParts.join('\u001F');
@@ -363,7 +368,7 @@ export const weeklyCommand = define({
 
 				const breakdownRows = Object.entries(groupedEntries)
 					.map(([groupKey, groupRows]) => ({
-						label: groupKey.split('\u001F').join(' / '),
+						label: groupKey.split('\u001F').join(' > '),
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
@@ -375,20 +380,14 @@ export const weeklyCommand = define({
 						const modelMetrics = modelMetricsValues[0];
 						if (modelMetrics != null) {
 							const pricingModel = row.entries[0]?.model ?? row.label;
+							const rowLabel = includeSource ? row.label : formatModelLabelForTable(row.label);
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
 								row.entries,
 								pricingModel,
 								fetcher,
 							);
 
-							table.push(
-								buildModelBreakdownRow(
-									'',
-									formatModelLabelForTable(row.label),
-									modelMetrics,
-									componentCosts,
-								),
-							);
+							table.push(buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts));
 							continue;
 						}
 					}
