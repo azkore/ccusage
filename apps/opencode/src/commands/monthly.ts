@@ -3,6 +3,11 @@ import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
+import {
+	formatReportSourceLabel,
+	formatSourceLabel,
+	resolveBreakdownDimensions,
+} from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import {
@@ -73,7 +78,11 @@ export const monthlyCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show per-model breakdown rows',
+			description: 'Show all available breakdown rows',
+		},
+		breakdown: {
+			type: 'string',
+			description: 'Comma-separated breakdowns (source,model) or none',
 		},
 	},
 	async run(ctx) {
@@ -85,9 +94,19 @@ export const monthlyCommand = define({
 		const sourceInput =
 			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
 		const source = parseUsageSource(sourceInput);
+		const breakdownInput =
+			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
+		const availableBreakdowns: Array<'source' | 'model'> =
+			source === 'all' ? ['source', 'model'] : ['model'];
+		const breakdowns = resolveBreakdownDimensions({
+			full: ctx.values.full === true,
+			breakdownInput,
+			available: availableBreakdowns,
+		});
+		const showSourceBreakdown = breakdowns.includes('source');
+		const showModelBreakdown = breakdowns.includes('model');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
-		const showBreakdown = ctx.values.full === true;
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
 		const { sinceDate, untilDate } = resolveDateRangeFilters({
 			sinceInput,
@@ -138,6 +157,70 @@ export const monthlyCommand = define({
 			modelBreakdown: Record<string, ModelTokenData>;
 		}> = [];
 		const breakdownEntriesByMonth: Record<string, Record<string, LoadedUsageEntry[]>> = {};
+		const entryCostMap = new Map<LoadedUsageEntry, number>();
+
+		const aggregateEntries = (groupEntries: LoadedUsageEntry[]) => {
+			let inputTokens = 0;
+			let outputTokens = 0;
+			let reasoningTokens = 0;
+			let cacheCreationTokens = 0;
+			let cacheReadTokens = 0;
+			let totalCost = 0;
+			const modelBreakdown: Record<string, ModelTokenData> = {};
+			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
+
+			for (const entry of groupEntries) {
+				const modelLabel = modelLabelForEntry(entry);
+				const cost = entryCostMap.get(entry) ?? 0;
+				const mapped = remapTokensForAggregate(entry.usage);
+				inputTokens += mapped.base;
+				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
+				cacheCreationTokens += mapped.cacheCreate;
+				cacheReadTokens += mapped.cacheRead;
+				totalCost += cost;
+
+				let mb = modelBreakdown[modelLabel];
+				if (mb == null) {
+					mb = {
+						inputTokens: 0,
+						outputTokens: 0,
+						reasoningTokens: 0,
+						cacheCreationTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+					};
+					modelBreakdown[modelLabel] = mb;
+				}
+
+				mb.inputTokens += entry.usage.inputTokens;
+				mb.outputTokens += entry.usage.outputTokens;
+				mb.reasoningTokens += entry.usage.reasoningTokens;
+				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
+				mb.totalCost += cost;
+
+				let modelEntries = modelEntriesByModel[modelLabel];
+				if (modelEntries == null) {
+					modelEntries = [];
+					modelEntriesByModel[modelLabel] = modelEntries;
+				}
+				modelEntries.push(entry);
+			}
+
+			return {
+				totals: {
+					inputTokens,
+					outputTokens,
+					reasoningTokens,
+					cacheCreationTokens,
+					cacheReadTokens,
+					totalCost,
+				},
+				modelBreakdown,
+				modelEntriesByModel,
+			};
+		};
 
 		for (const [month, monthEntries] of Object.entries(entriesByMonth)) {
 			let inputTokens = 0;
@@ -153,6 +236,7 @@ export const monthlyCommand = define({
 			for (const entry of monthEntries) {
 				const modelLabel = modelLabelForEntry(entry);
 				const cost = await calculateCostForEntry(entry, fetcher);
+				entryCostMap.set(entry, cost);
 				const mapped = remapTokensForAggregate(entry.usage);
 				inputTokens += mapped.base;
 				outputTokens += entry.usage.outputTokens;
@@ -229,8 +313,7 @@ export const monthlyCommand = define({
 			return;
 		}
 
-		const sourceLabel =
-			source === 'all' ? 'All Sources' : source === 'claude' ? 'Claude' : 'OpenCode';
+		const sourceLabel = formatReportSourceLabel(source);
 
 		// eslint-disable-next-line no-console
 		console.log(`\n📊 ${sourceLabel} Token Usage Report - Monthly\n`);
@@ -242,27 +325,67 @@ export const monthlyCommand = define({
 		});
 		const compact = isCompactTable(table);
 
+		const pushModelBreakdownRows = async (
+			modelBreakdown: Record<string, ModelTokenData>,
+			entriesByModel: Record<string, LoadedUsageEntry[]>,
+		) => {
+			const sortedModels = Object.entries(modelBreakdown).sort(
+				(a, b) => b[1].totalCost - a[1].totalCost,
+			);
+
+			for (const [model, metrics] of sortedModels) {
+				const modelEntries = entriesByModel[model] ?? [];
+				const pricingModel = modelEntries[0]?.model ?? model;
+				const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+					modelEntries,
+					pricingModel,
+					fetcher,
+				);
+
+				table.push(
+					buildModelBreakdownRow('', formatModelLabelForTable(model), metrics, componentCosts),
+				);
+			}
+		};
+
 		for (const data of monthlyData) {
 			table.push(
 				buildAggregateSummaryRow(data.month, 'Monthly Total', data, { bold: true, compact }),
 			);
 
-			if (showBreakdown && !compact) {
-				const sortedModels = Object.entries(data.modelBreakdown).sort(
-					(a, b) => b[1].totalCost - a[1].totalCost,
-				);
+			if (!compact && (showSourceBreakdown || showModelBreakdown)) {
+				const monthEntries = entriesByMonth[data.month] ?? [];
 
-				for (const [model, metrics] of sortedModels) {
-					const modelEntries = breakdownEntriesByMonth[data.month]?.[model] ?? [];
-					const pricingModel = modelEntries[0]?.model ?? model;
-					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
-						modelEntries,
-						pricingModel,
-						fetcher,
-					);
+				if (showSourceBreakdown) {
+					const entriesBySource = groupBy(monthEntries, (entry) => entry.source);
+					const sourceRows = Object.entries(entriesBySource)
+						.map(([entrySource, sourceEntries]) => ({
+							entrySource: entrySource as 'opencode' | 'claude',
+							aggregate: aggregateEntries(sourceEntries),
+						}))
+						.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
 
-					table.push(
-						buildModelBreakdownRow('', formatModelLabelForTable(model), metrics, componentCosts),
+					for (const sourceRow of sourceRows) {
+						table.push(
+							buildAggregateSummaryRow(
+								'',
+								`${formatSourceLabel(sourceRow.entrySource)} Total`,
+								sourceRow.aggregate.totals,
+								{ compact },
+							),
+						);
+
+						if (showModelBreakdown) {
+							await pushModelBreakdownRows(
+								sourceRow.aggregate.modelBreakdown,
+								sourceRow.aggregate.modelEntriesByModel,
+							);
+						}
+					}
+				} else if (showModelBreakdown) {
+					await pushModelBreakdownRows(
+						data.modelBreakdown,
+						breakdownEntriesByMonth[data.month] ?? {},
 					);
 				}
 			}

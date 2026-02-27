@@ -4,6 +4,7 @@ import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
+import { formatReportSourceLabel, resolveBreakdownDimensions } from '../breakdown.ts';
 import {
 	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
@@ -95,12 +96,15 @@ export const modelCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show project/session breakdown rows',
+			description: 'Show all available breakdown rows',
+		},
+		breakdown: {
+			type: 'string',
+			description: 'Comma-separated breakdowns (project,session) or none',
 		},
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
-		const showBreakdown = ctx.values.full === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
@@ -108,6 +112,15 @@ export const modelCommand = define({
 		const sourceInput =
 			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
 		const source = parseUsageSource(sourceInput);
+		const breakdownInput =
+			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
+		const breakdowns = resolveBreakdownDimensions({
+			full: ctx.values.full === true,
+			breakdownInput,
+			available: ['project', 'session'],
+		});
+		const showProjectBreakdown = breakdowns.includes('project') || breakdowns.includes('session');
+		const showSessionBreakdown = breakdowns.includes('session');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -291,7 +304,7 @@ export const modelCommand = define({
 							reasoningTokens: d.reasoningTokens,
 							cacheReadTokens: d.cacheReadTokens,
 							totalCost: d.totalCost,
-							...(showBreakdown
+							...(showProjectBreakdown
 								? {
 										projectBreakdown: d.projectBreakdown.map((projectData) => ({
 											projectName: projectData.projectName,
@@ -300,15 +313,19 @@ export const modelCommand = define({
 											reasoningTokens: projectData.reasoningTokens,
 											cacheReadTokens: projectData.cacheReadTokens,
 											totalCost: projectData.totalCost,
-											sessions: projectData.sessions.map((sessionData) => ({
-												sessionID: sessionData.sessionID,
-												sessionTitle: sessionData.sessionTitle,
-												inputTokens: totalInputTokens(sessionData),
-												outputTokens: sessionData.outputTokens,
-												reasoningTokens: sessionData.reasoningTokens,
-												cacheReadTokens: sessionData.cacheReadTokens,
-												totalCost: sessionData.totalCost,
-											})),
+											...(showSessionBreakdown
+												? {
+														sessions: projectData.sessions.map((sessionData) => ({
+															sessionID: sessionData.sessionID,
+															sessionTitle: sessionData.sessionTitle,
+															inputTokens: totalInputTokens(sessionData),
+															outputTokens: sessionData.outputTokens,
+															reasoningTokens: sessionData.reasoningTokens,
+															cacheReadTokens: sessionData.cacheReadTokens,
+															totalCost: sessionData.totalCost,
+														})),
+													}
+												: {}),
 										})),
 									}
 								: {}),
@@ -328,8 +345,7 @@ export const modelCommand = define({
 			return;
 		}
 
-		const sourceLabel =
-			source === 'all' ? 'All Sources' : source === 'claude' ? 'Claude' : 'OpenCode';
+		const sourceLabel = formatReportSourceLabel(source);
 
 		// eslint-disable-next-line no-console
 		console.log(`\n📊 ${sourceLabel} Token Usage Report - By Model\n`);
@@ -352,10 +368,10 @@ export const modelCommand = define({
 				),
 			);
 
-			if (showBreakdown && !compact) {
+			if (showProjectBreakdown && !compact) {
 				for (const projectData of data.projectBreakdown) {
 					const sessionCount = projectData.sessions.length;
-					if (sessionCount === 1) {
+					if (showSessionBreakdown && sessionCount === 1) {
 						const sessionData = projectData.sessions[0];
 						if (sessionData != null) {
 							const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
@@ -391,6 +407,10 @@ export const modelCommand = define({
 							projectComponentCosts,
 						),
 					);
+
+					if (!showSessionBreakdown) {
+						continue;
+					}
 
 					for (const sessionData of projectData.sessions) {
 						const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);

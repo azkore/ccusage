@@ -5,6 +5,7 @@ import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import pc from 'picocolors';
+import { formatReportSourceLabel, resolveBreakdownDimensions } from '../breakdown.ts';
 import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
@@ -79,7 +80,11 @@ export const sessionCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show per-model breakdown rows',
+			description: 'Show all available breakdown rows',
+		},
+		breakdown: {
+			type: 'string',
+			description: 'Comma-separated breakdowns (model) or none',
 		},
 		subagents: {
 			type: 'boolean',
@@ -88,7 +93,6 @@ export const sessionCommand = define({
 	},
 	async run(ctx) {
 		const jsonOutput = Boolean(ctx.values.json);
-		const showBreakdown = ctx.values.full === true;
 		const showSubagents = ctx.values.subagents === true;
 		const showProviders = ctx.values.providers === true;
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
@@ -97,6 +101,14 @@ export const sessionCommand = define({
 		const sourceInput =
 			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
 		const source = parseUsageSource(sourceInput);
+		const breakdownInput =
+			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
+		const breakdowns = resolveBreakdownDimensions({
+			full: ctx.values.full === true,
+			breakdownInput,
+			available: ['model'],
+		});
+		const showModelBreakdown = breakdowns.includes('model');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -261,8 +273,7 @@ export const sessionCommand = define({
 			return;
 		}
 
-		const sourceLabel =
-			source === 'all' ? 'All Sources' : source === 'claude' ? 'Claude' : 'OpenCode';
+		const sourceLabel = formatReportSourceLabel(source);
 
 		// eslint-disable-next-line no-console
 		console.log(`\n📊 ${sourceLabel} Token Usage Report - Sessions\n`);
@@ -296,7 +307,7 @@ export const sessionCommand = define({
 				),
 			);
 
-			if (showBreakdown && !compact) {
+			if (showModelBreakdown && !compact) {
 				const sortedParentModels = Object.entries(parentSession.modelBreakdown).sort(
 					(a, b) => b[1].totalCost - a[1].totalCost,
 				);
@@ -337,7 +348,7 @@ export const sessionCommand = define({
 						),
 					);
 
-					if (showBreakdown && !compact) {
+					if (showModelBreakdown && !compact) {
 						const sortedSubModels = Object.entries(subSession.modelBreakdown).sort(
 							(a, b) => b[1].totalCost - a[1].totalCost,
 						);

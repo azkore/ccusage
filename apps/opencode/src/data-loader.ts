@@ -78,6 +78,7 @@ function getDatabaseSyncCtor() {
 export type LoadedUsageEntry = {
 	timestamp: Date;
 	sessionID: string;
+	source: Exclude<UsageSource, 'all'>;
 	provider: string;
 	usage: {
 		inputTokens: number;
@@ -283,6 +284,7 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 			entries.push({
 				timestamp: new Date(row.time_created ?? Date.now()),
 				sessionID: row.session_id,
+				source: 'opencode',
 				provider: row.providerID ?? 'unknown',
 				usage: {
 					inputTokens,
@@ -430,6 +432,7 @@ async function loadClaudeData(): Promise<{
 					entries.push({
 						timestamp,
 						sessionID,
+						source: 'claude',
 						provider,
 						usage: {
 							inputTokens,

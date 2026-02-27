@@ -91,6 +91,7 @@ if (import.meta.vitest != null) {
 	const baseEntry: LoadedUsageEntry = {
 		timestamp: new Date('2026-01-01T00:00:00Z'),
 		sessionID: 'session-1',
+		source: 'opencode',
 		provider: 'openai',
 		model: 'gpt-5.3-codex',
 		costUSD: 1,
