@@ -26,15 +26,6 @@ import {
 	isCompactTable,
 	remapTokensForAggregate,
 } from '../usage-table.ts';
-const MAX_SESSION_TITLE_CHARS = 40;
-
-function truncateSessionTitle(title: string): string {
-	if (title.length <= MAX_SESSION_TITLE_CHARS) {
-		return title;
-	}
-
-	return `${title.slice(0, MAX_SESSION_TITLE_CHARS - 3)}...`;
-}
 
 type SessionBreakdown = ModelTokenData & {
 	sessionID: string;
@@ -104,7 +95,7 @@ export const modelCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (project,session) or none',
+			description: 'Comma-separated breakdowns (source,provider,project,session) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -126,10 +117,15 @@ export const modelCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['project', 'session'],
+			available: ['source', 'provider', 'project', 'session'],
 		});
-		const showProjectBreakdown = breakdowns.includes('project') || breakdowns.includes('session');
-		const showSessionBreakdown = breakdowns.includes('session');
+		const showBreakdown = breakdowns.length > 0;
+		const includeSource = breakdowns.includes('source');
+		const includeProvider = breakdowns.includes('provider');
+		const includeProject = breakdowns.includes('project');
+		const includeSession = breakdowns.includes('session');
+		const showProjectBreakdown = includeProject || includeSession;
+		const showSessionBreakdown = includeSession;
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -166,15 +162,18 @@ export const modelCommand = define({
 			filteredEntries,
 			showProviders ? 'always' : 'never',
 		);
+		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
 		const entriesByModel = groupBy(filteredEntries, (entry) => modelLabelForEntry(entry));
 
 		const modelData: Array<
 			ModelTokenData & {
 				model: string;
 				componentCosts: ComponentCosts;
+				entries: LoadedUsageEntry[];
 				projectBreakdown: ProjectBreakdown[];
 			}
 		> = [];
+		const entryCostMap = new Map<LoadedUsageEntry, number>();
 
 		for (const [modelLabel, modelEntries] of Object.entries(entriesByModel)) {
 			let inputTokens = 0;
@@ -194,6 +193,7 @@ export const modelCommand = define({
 
 			for (const entry of modelEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
+				entryCostMap.set(entry, cost);
 				const mapped = remapTokensForAggregate(entry.usage);
 				inputTokens += mapped.base;
 				outputTokens += entry.usage.outputTokens;
@@ -285,6 +285,7 @@ export const modelCommand = define({
 				cacheReadTokens,
 				totalCost,
 				componentCosts,
+				entries: modelEntries,
 				projectBreakdown,
 			});
 		}
@@ -388,89 +389,100 @@ export const modelCommand = define({
 		});
 		const compact = isCompactTable(table);
 
-		for (const data of visibleModelData) {
-			// Model summary rows use per-model costs (not aggregate)
-			table.push(
-				buildModelBreakdownRow(
-					pc.bold(formatModelLabelForTable(data.model)),
-					null,
-					data,
-					data.componentCosts,
-				),
-			);
+		const aggregateEntries = (entries: LoadedUsageEntry[]) => {
+			let inputTokens = 0;
+			let outputTokens = 0;
+			let reasoningTokens = 0;
+			let cacheCreationTokens = 0;
+			let cacheReadTokens = 0;
+			let totalCost = 0;
 
-			if (showProjectBreakdown && !compact) {
-				for (const projectData of data.projectBreakdown) {
-					if (skipZero && isDisplayedZeroCost(projectData.totalCost)) {
-						continue;
-					}
+			for (const entry of entries) {
+				inputTokens += entry.usage.inputTokens;
+				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
+				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				cacheReadTokens += entry.usage.cacheReadInputTokens;
+				totalCost += entryCostMap.get(entry) ?? 0;
+			}
 
-					const visibleSessions = skipZero
-						? projectData.sessions.filter(
-								(sessionData) => !isDisplayedZeroCost(sessionData.totalCost),
-							)
-						: projectData.sessions;
+			return {
+				inputTokens,
+				outputTokens,
+				reasoningTokens,
+				cacheCreationTokens,
+				cacheReadTokens,
+				totalCost,
+			};
+		};
 
-					const sessionCount = visibleSessions.length;
-					if (showSessionBreakdown && sessionCount === 1) {
-						const sessionData = visibleSessions[0];
-						if (sessionData != null) {
-							const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
-							const sessionComponentCosts = await calculateComponentCostsFromEntries(
-								sessionData.entries,
-								data.model,
-								fetcher,
-							);
+		if (showBreakdown && !compact) {
+			const breakdownSourceEntries = visibleModelData.flatMap((data) => data.entries);
+			const groupedEntries = groupBy(breakdownSourceEntries, (entry) => {
+				const keyParts: string[] = [];
+				const metadata = sessionMetadataMap.get(entry.sessionID);
+				const projectName = extractProjectName(
+					metadata?.directory ?? 'unknown',
+					metadata?.projectID ?? '',
+				);
+				const modelKey = includeProvider
+					? plainModelLabelForEntry(entry)
+					: modelLabelForEntry(entry);
 
-							table.push(
-								buildModelBreakdownRow(
-									`  ▸ ${projectData.projectName}/${truncatedSessionTitle}`,
-									null,
-									sessionData,
-									sessionComponentCosts,
-								),
-							);
-						}
-						continue;
-					}
-
-					const projectComponentCosts = await calculateComponentCostsFromEntries(
-						projectData.entries,
-						data.model,
-						fetcher,
-					);
-
-					table.push(
-						buildModelBreakdownRow(
-							`  ▸ ${projectData.projectName}`,
-							null,
-							projectData,
-							projectComponentCosts,
-						),
-					);
-
-					if (!showSessionBreakdown) {
-						continue;
-					}
-
-					for (const sessionData of visibleSessions) {
-						const truncatedSessionTitle = truncateSessionTitle(sessionData.sessionTitle);
-						const sessionComponentCosts = await calculateComponentCostsFromEntries(
-							sessionData.entries,
-							data.model,
-							fetcher,
-						);
-
-						table.push(
-							buildModelBreakdownRow(
-								`    - ${truncatedSessionTitle}\n${pc.dim(`      ${sessionData.sessionID}`)}`,
-								null,
-								sessionData,
-								sessionComponentCosts,
-							),
-						);
-					}
+				if (includeSource) {
+					keyParts.push(entry.source);
 				}
+				if (includeProvider) {
+					keyParts.push(entry.provider);
+				}
+				if (includeProject) {
+					keyParts.push(projectName);
+				}
+				if (includeSession) {
+					keyParts.push(entry.sessionID);
+				}
+
+				keyParts.push(modelKey);
+				return keyParts.join('/');
+			});
+
+			const breakdownRows = Object.entries(groupedEntries)
+				.map(([label, entries]) => ({
+					label,
+					entries,
+					totals: aggregateEntries(entries),
+				}))
+				.filter((row) => !skipZero || !isDisplayedZeroCost(row.totals.totalCost))
+				.sort((a, b) => b.totals.totalCost - a.totals.totalCost);
+
+			for (const row of breakdownRows) {
+				const pricingModel = row.entries[0]?.model ?? row.label;
+				const componentCosts = await calculateComponentCostsFromEntries(
+					row.entries,
+					pricingModel,
+					fetcher,
+				);
+
+				table.push(
+					buildModelBreakdownRow(
+						formatModelLabelForTable(row.label),
+						null,
+						row.totals,
+						componentCosts,
+					),
+				);
+			}
+		} else {
+			for (const data of visibleModelData) {
+				// Model summary rows use per-model costs (not aggregate)
+				table.push(
+					buildModelBreakdownRow(
+						pc.bold(formatModelLabelForTable(data.model)),
+						null,
+						data,
+						data.componentCosts,
+					),
+				);
 			}
 		}
 

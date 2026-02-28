@@ -92,7 +92,7 @@ export const sessionCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (model) or none',
+			description: 'Comma-separated breakdowns (source,provider,model,project) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -119,9 +119,13 @@ export const sessionCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['model'],
+			available: ['source', 'provider', 'model', 'project'],
 		});
-		const showModelBreakdown = breakdowns.includes('model');
+		const showBreakdown = breakdowns.length > 0;
+		const includeSource = breakdowns.includes('source');
+		const includeProvider = breakdowns.includes('provider');
+		const includeModel = breakdowns.includes('model');
+		const includeProject = breakdowns.includes('project');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -158,6 +162,7 @@ export const sessionCommand = define({
 			filteredEntries,
 			showProviders ? 'always' : 'never',
 		);
+		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
 
 		const entriesBySession = groupBy(filteredEntries, (entry) => entry.sessionID);
 
@@ -178,7 +183,7 @@ export const sessionCommand = define({
 		};
 
 		const sessionData: SessionData[] = [];
-		const breakdownEntriesBySession: Record<string, Record<string, LoadedUsageEntry[]>> = {};
+		const entryCostMap = new Map<LoadedUsageEntry, number>();
 
 		for (const [sessionID, sessionEntries] of Object.entries(entriesBySession)) {
 			let inputTokens = 0;
@@ -190,11 +195,11 @@ export const sessionCommand = define({
 			const modelsSet = new Set<string>();
 			let lastActivity = sessionEntries[0]!.timestamp;
 			const modelBreakdown: Record<string, ModelTokenData> = {};
-			const modelEntriesByModel: Record<string, LoadedUsageEntry[]> = {};
 
 			for (const entry of sessionEntries) {
 				const modelLabel = modelLabelForEntry(entry);
 				const cost = await calculateCostForEntry(entry, fetcher);
+				entryCostMap.set(entry, cost);
 				const mapped = remapTokensForAggregate(entry.usage);
 				inputTokens += mapped.base;
 				outputTokens += entry.usage.outputTokens;
@@ -226,13 +231,6 @@ export const sessionCommand = define({
 				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
 				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
 				mb.totalCost += cost;
-
-				let modelEntries = modelEntriesByModel[modelLabel];
-				if (modelEntries == null) {
-					modelEntries = [];
-					modelEntriesByModel[modelLabel] = modelEntries;
-				}
-				modelEntries.push(entry);
 			}
 
 			const metadata = sessionMetadataMap.get(sessionID);
@@ -255,7 +253,6 @@ export const sessionCommand = define({
 				lastActivity,
 				modelBreakdown,
 			});
-			breakdownEntriesBySession[sessionID] = modelEntriesByModel;
 		}
 
 		sessionData.sort(
@@ -311,6 +308,133 @@ export const sessionCommand = define({
 		});
 		const compact = isCompactTable(table);
 
+		const aggregateEntries = (entries: LoadedUsageEntry[]) => {
+			let inputTokens = 0;
+			let outputTokens = 0;
+			let reasoningTokens = 0;
+			let cacheCreationTokens = 0;
+			let cacheReadTokens = 0;
+			let totalCost = 0;
+			const modelBreakdown: Record<string, ModelTokenData> = {};
+
+			for (const entry of entries) {
+				const modelLabel = modelLabelForEntry(entry);
+				const mapped = remapTokensForAggregate(entry.usage);
+				inputTokens += mapped.base;
+				outputTokens += entry.usage.outputTokens;
+				reasoningTokens += entry.usage.reasoningTokens;
+				cacheCreationTokens += mapped.cacheCreate;
+				cacheReadTokens += mapped.cacheRead;
+				totalCost += entryCostMap.get(entry) ?? 0;
+
+				let mb = modelBreakdown[modelLabel];
+				if (mb == null) {
+					mb = {
+						inputTokens: 0,
+						outputTokens: 0,
+						reasoningTokens: 0,
+						cacheCreationTokens: 0,
+						cacheReadTokens: 0,
+						totalCost: 0,
+					};
+					modelBreakdown[modelLabel] = mb;
+				}
+
+				mb.inputTokens += entry.usage.inputTokens;
+				mb.outputTokens += entry.usage.outputTokens;
+				mb.reasoningTokens += entry.usage.reasoningTokens;
+				mb.cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				mb.cacheReadTokens += entry.usage.cacheReadInputTokens;
+				mb.totalCost += entryCostMap.get(entry) ?? 0;
+			}
+
+			return {
+				inputTokens,
+				outputTokens,
+				reasoningTokens,
+				cacheCreationTokens,
+				cacheReadTokens,
+				totalCost,
+				modelBreakdown,
+			};
+		};
+
+		const pushBreakdownRowsForSession = async (sessionID: string, prefix: string) => {
+			if (compact || !showBreakdown) {
+				return;
+			}
+
+			const sessionEntries = entriesBySession[sessionID] ?? [];
+			const groupedEntries = groupBy(sessionEntries, (entry) => {
+				const keyParts: string[] = [];
+				const metadata = sessionMetadataMap.get(entry.sessionID);
+				const projectName = extractProjectName(
+					metadata?.directory ?? 'unknown',
+					metadata?.projectID ?? '',
+				);
+				const modelKey = includeProvider
+					? plainModelLabelForEntry(entry)
+					: modelLabelForEntry(entry);
+
+				if (includeSource) {
+					keyParts.push(entry.source);
+				}
+				if (includeProvider && includeModel) {
+					keyParts.push(`${entry.provider}/${modelKey}`);
+				} else {
+					if (includeProvider) {
+						keyParts.push(entry.provider);
+					}
+					if (includeModel) {
+						keyParts.push(modelKey);
+					}
+				}
+				if (includeProject) {
+					keyParts.push(projectName);
+				}
+
+				return keyParts.join('\u001F');
+			});
+
+			const rows = Object.entries(groupedEntries)
+				.map(([groupKey, entries]) => ({
+					label: groupKey.split('\u001F').join('/'),
+					entries,
+					aggregate: aggregateEntries(entries),
+				}))
+				.filter((row) => !skipZero || !isDisplayedZeroCost(row.aggregate.totalCost))
+				.sort((a, b) => b.aggregate.totalCost - a.aggregate.totalCost);
+
+			for (const row of rows) {
+				const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
+				if (includeModel && breakdowns.length === 1 && modelMetricsValues.length === 1) {
+					const modelMetrics = modelMetricsValues[0];
+					if (modelMetrics != null) {
+						const pricingModel = row.entries[0]?.model ?? row.label;
+						const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
+							row.entries,
+							pricingModel,
+							fetcher,
+						);
+
+						table.push(
+							buildModelBreakdownRow(
+								`${prefix}${formatModelLabelForTable(row.label)}`,
+								'',
+								modelMetrics,
+								componentCosts,
+							),
+						);
+						continue;
+					}
+				}
+
+				table.push(
+					buildAggregateSummaryRow(`${prefix}${row.label}`, '', row.aggregate, { compact }),
+				);
+			}
+		};
+
 		const visibleSessionIDs = new Set(visibleSessionData.map((session) => session.sessionID));
 		const sessionsByParent = groupBy(visibleSessionData, (session) => {
 			if (session.parentID == null || !visibleSessionIDs.has(session.parentID)) {
@@ -340,30 +464,7 @@ export const sessionCommand = define({
 				),
 			);
 
-			if (showModelBreakdown && !compact) {
-				const sortedParentModels = Object.entries(parentSession.modelBreakdown).sort(
-					(a, b) => b[1].totalCost - a[1].totalCost,
-				);
-
-				for (const [model, metrics] of sortedParentModels) {
-					if (skipZero && isDisplayedZeroCost(metrics.totalCost)) {
-						continue;
-					}
-
-					const modelEntries = breakdownEntriesBySession[parentSession.sessionID]?.[model] ?? [];
-					const pricingModel = modelEntries[0]?.model ?? model;
-					const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
-						modelEntries,
-						pricingModel,
-						fetcher,
-					);
-
-					// Session puts model label in first column, empty models column
-					table.push(
-						buildModelBreakdownRow(formatModelLabelForTable(model), '', metrics, componentCosts),
-					);
-				}
-			}
+			await pushBreakdownRowsForSession(parentSession.sessionID, '  ▸ ');
 
 			const subSessions = showSubagents
 				? [...(sessionsByParent[parentSession.sessionID] ?? [])].sort(
@@ -385,34 +486,7 @@ export const sessionCommand = define({
 						),
 					);
 
-					if (showModelBreakdown && !compact) {
-						const sortedSubModels = Object.entries(subSession.modelBreakdown).sort(
-							(a, b) => b[1].totalCost - a[1].totalCost,
-						);
-
-						for (const [model, metrics] of sortedSubModels) {
-							if (skipZero && isDisplayedZeroCost(metrics.totalCost)) {
-								continue;
-							}
-
-							const modelEntries = breakdownEntriesBySession[subSession.sessionID]?.[model] ?? [];
-							const pricingModel = modelEntries[0]?.model ?? model;
-							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
-								modelEntries,
-								pricingModel,
-								fetcher,
-							);
-
-							table.push(
-								buildModelBreakdownRow(
-									formatModelLabelForTable(model),
-									'',
-									metrics,
-									componentCosts,
-								),
-							);
-						}
-					}
+					await pushBreakdownRowsForSession(subSession.sessionID, '    - ');
 				}
 
 				const subtotalInputTokens =

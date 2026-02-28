@@ -16,7 +16,7 @@ import {
 	formatLocalDateKey,
 	resolveDateRangeFilters,
 } from '../date-filter.ts';
-import { filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
+import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 import {
 	applyModelAliasForDisplay,
@@ -87,7 +87,7 @@ export const dailyCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,provider,model) or none',
+			description: 'Comma-separated breakdowns (source,provider,model,project,session) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -106,8 +106,13 @@ export const dailyCommand = define({
 		const source = parseUsageSource(sourceInput);
 		const breakdownInput =
 			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
-		const availableBreakdowns: Array<'source' | 'provider' | 'model'> =
-			source === 'all' ? ['source', 'provider', 'model'] : ['provider', 'model'];
+		const availableBreakdowns: Array<'source' | 'provider' | 'model' | 'project' | 'session'> = [
+			'source',
+			'provider',
+			'model',
+			'project',
+			'session',
+		];
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
@@ -117,6 +122,8 @@ export const dailyCommand = define({
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
+		const includeProject = breakdowns.includes('project');
+		const includeSession = breakdowns.includes('session');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -346,6 +353,11 @@ export const dailyCommand = define({
 				const dayEntries = entriesByDate[data.date] ?? [];
 				const groupedEntries = groupBy(dayEntries, (entry) => {
 					const keyParts: string[] = [];
+					const metadata = sessionMetadataMap.get(entry.sessionID);
+					const projectName = extractProjectName(
+						metadata?.directory ?? 'unknown',
+						metadata?.projectID ?? '',
+					);
 					const modelKey = includeProvider
 						? plainModelLabelForEntry(entry)
 						: modelLabelForEntry(entry);
@@ -361,6 +373,12 @@ export const dailyCommand = define({
 						if (includeModel) {
 							keyParts.push(modelKey);
 						}
+					}
+					if (includeProject) {
+						keyParts.push(projectName);
+					}
+					if (includeSession) {
+						keyParts.push(entry.sessionID);
 					}
 
 					return keyParts.join('\u001F');
@@ -381,9 +399,10 @@ export const dailyCommand = define({
 						const modelMetrics = modelMetricsValues[0];
 						if (modelMetrics != null) {
 							const pricingModel = row.entries[0]?.model ?? row.label;
-							const rowLabel = includeSource
-								? formatBreakdownLabelForTable(row.label)
-								: formatModelLabelForTable(row.label);
+							const rowLabel =
+								breakdowns.length === 1 && includeModel
+									? formatModelLabelForTable(row.label)
+									: formatBreakdownLabelForTable(row.label);
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
 								row.entries,
 								pricingModel,
