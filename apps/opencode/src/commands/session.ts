@@ -54,7 +54,16 @@ export const sessionCommand = define({
 		model: {
 			type: 'string',
 			short: 'm',
-			description: 'Filter models by name/provider',
+			description: 'Filter by model name',
+		},
+		provider: {
+			type: 'string',
+			description: 'Filter by provider name',
+		},
+		'full-model': {
+			type: 'string',
+			short: 'M',
+			description: 'Filter by source/provider/model composite',
 		},
 		providers: {
 			type: 'boolean',
@@ -117,6 +126,9 @@ export const sessionCommand = define({
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const modelInput = typeof ctx.values.model === 'string' ? ctx.values.model.trim() : '';
+		const providerInput = typeof ctx.values.provider === 'string' ? ctx.values.provider.trim() : '';
+		const fullModelInput =
+			typeof ctx.values['full-model'] === 'string' ? ctx.values['full-model'].trim() : '';
 		const sourceInput =
 			typeof ctx.values.source === 'string' ? ctx.values.source.trim() : undefined;
 		const source = parseUsageSource(sourceInput);
@@ -151,6 +163,8 @@ export const sessionCommand = define({
 				idInput,
 				projectInput,
 				modelInput,
+				providerInput,
+				fullModelInput,
 			},
 		);
 

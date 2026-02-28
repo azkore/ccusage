@@ -47,6 +47,8 @@ export function filterEntriesBySessionProjectFilters(
 		idInput: string;
 		projectInput: string;
 		modelInput: string;
+		providerInput: string;
+		fullModelInput: string;
 	},
 ): LoadedUsageEntry[] {
 	let filteredEntries = entries;
@@ -65,6 +67,18 @@ export function filterEntriesBySessionProjectFilters(
 		filteredEntries = filteredEntries.filter((entry) => matchesModelFilter(entry, args.modelInput));
 	}
 
+	if (args.providerInput !== '') {
+		filteredEntries = filteredEntries.filter((entry) =>
+			matchesProviderFilter(entry, args.providerInput),
+		);
+	}
+
+	if (args.fullModelInput !== '') {
+		filteredEntries = filteredEntries.filter((entry) =>
+			matchesFullModelFilter(entry, args.fullModelInput),
+		);
+	}
+
 	return filteredEntries;
 }
 
@@ -74,15 +88,28 @@ export function matchesModelFilter(entry: LoadedUsageEntry, modelFilter: string)
 	}
 
 	const normalizedFilter = modelFilter.toLowerCase();
-	const normalizedModel = normalizeModelName(entry.model, entry.provider);
-	const providerAndModel = `${entry.provider}/${normalizedModel}`;
+	const normalizedModel = normalizeModelName(entry.model, entry.provider).toLowerCase();
 
-	return (
-		entry.model.toLowerCase().includes(normalizedFilter) ||
-		normalizedModel.toLowerCase().includes(normalizedFilter) ||
-		providerAndModel.toLowerCase().includes(normalizedFilter) ||
-		entry.provider.toLowerCase().includes(normalizedFilter)
-	);
+	return normalizedModel.includes(normalizedFilter);
+}
+
+export function matchesProviderFilter(entry: LoadedUsageEntry, providerFilter: string): boolean {
+	if (providerFilter === '') {
+		return true;
+	}
+
+	return entry.provider.toLowerCase().includes(providerFilter.toLowerCase());
+}
+
+export function matchesFullModelFilter(entry: LoadedUsageEntry, fullModelFilter: string): boolean {
+	if (fullModelFilter === '') {
+		return true;
+	}
+
+	const normalizedModel = normalizeModelName(entry.model, entry.provider);
+	const fullModel = `${entry.source}/${entry.provider}/${normalizedModel}`.toLowerCase();
+
+	return fullModel.includes(fullModelFilter.toLowerCase());
 }
 
 if (import.meta.vitest != null) {
@@ -109,12 +136,8 @@ if (import.meta.vitest != null) {
 			expect(matchesModelFilter(baseEntry, '5.3')).toBe(true);
 		});
 
-		it('matches provider/model pattern', () => {
-			expect(matchesModelFilter(baseEntry, 'openai/gpt-5.3')).toBe(true);
-		});
-
-		it('matches provider name', () => {
-			expect(matchesModelFilter(baseEntry, 'openai')).toBe(true);
+		it('does not match provider in model-only filter', () => {
+			expect(matchesModelFilter(baseEntry, 'openai')).toBe(false);
 		});
 
 		it('handles model that already contains provider prefix', () => {
@@ -124,11 +147,31 @@ if (import.meta.vitest != null) {
 			};
 
 			expect(matchesModelFilter(prefixedEntry, 'gpt-5.2')).toBe(true);
-			expect(matchesModelFilter(prefixedEntry, 'openai/gpt-5.2')).toBe(true);
+			expect(matchesModelFilter(prefixedEntry, 'openai')).toBe(false);
 		});
 
 		it('returns false when no candidate matches', () => {
 			expect(matchesModelFilter(baseEntry, 'claude')).toBe(false);
+		});
+	});
+
+	describe('matchesProviderFilter', () => {
+		it('matches provider substring', () => {
+			expect(matchesProviderFilter(baseEntry, 'open')).toBe(true);
+		});
+
+		it('returns false for non-matching provider', () => {
+			expect(matchesProviderFilter(baseEntry, 'anthropic')).toBe(false);
+		});
+	});
+
+	describe('matchesFullModelFilter', () => {
+		it('matches source/provider/model composite', () => {
+			expect(matchesFullModelFilter(baseEntry, 'opencode/openai/gpt-5.3')).toBe(true);
+		});
+
+		it('does not match mismatched source', () => {
+			expect(matchesFullModelFilter(baseEntry, 'claude/openai/gpt-5.3')).toBe(false);
 		});
 	});
 }
