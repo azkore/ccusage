@@ -15,6 +15,7 @@ import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import { extractProjectName, filterEntriesBySessionProjectFilters } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
+import { setModelAliasEnabled } from '../model-alias.ts';
 import {
 	applyModelAliasForDisplay,
 	createModelLabelResolver,
@@ -59,6 +60,10 @@ export const sessionCommand = define({
 			type: 'boolean',
 			short: 'P',
 			description: 'Show provider prefixes in model names',
+		},
+		alias: {
+			type: 'boolean',
+			description: 'Apply model aliases from ~/.config/causage/aliases.yaml',
 		},
 		source: {
 			type: 'string',
@@ -108,6 +113,7 @@ export const sessionCommand = define({
 		const skipZero = ctx.values['skip-zero'] === true;
 		const showSubagents = ctx.values.subagents === true;
 		const showProviders = ctx.values.providers === true;
+		setModelAliasEnabled(ctx.values.alias === true);
 		const idInput = typeof ctx.values.id === 'string' ? ctx.values.id.trim() : '';
 		const projectInput = typeof ctx.values.project === 'string' ? ctx.values.project.trim() : '';
 		const modelInput = typeof ctx.values.model === 'string' ? ctx.values.model.trim() : '';

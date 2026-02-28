@@ -132,6 +132,11 @@ function resolveColorizer(colorSpec: string): Colorizer | undefined {
 }
 
 let cachedRules: CompiledAliasRule[] | null = null;
+let aliasEnabled = false;
+
+export function setModelAliasEnabled(enabled: boolean): void {
+	aliasEnabled = enabled;
+}
 
 function compileRulesFromConfig(configValue: ParsedAliasRule[]): CompiledAliasRule[] {
 	const compiled: CompiledAliasRule[] = [];
@@ -254,6 +259,10 @@ function loadAliasRules(): CompiledAliasRule[] {
 }
 
 export function resolveModelAlias(modelLabel: string): AliasResolveResult {
+	if (!aliasEnabled) {
+		return { label: modelLabel };
+	}
+
 	for (const rule of loadAliasRules()) {
 		if (!modelLabel.includes(rule.match)) {
 			continue;
