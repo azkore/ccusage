@@ -1,5 +1,5 @@
 export const DATE_FILTER_FORMAT_HINT =
-	'YYYYMMDD, YYYYMMDDHHMM, YYYY-MM-DD, YYYY-MM-DDTHH:MM, or ISO datetime';
+	'YYYYMMDD, YYYYMMDDHHMM, YYYY-MM-DD, YYYY-MM-DDTHH:MM, HH:MM, or ISO datetime';
 export const LAST_DURATION_FORMAT_HINT = '15m, 2h, 3d, or 1w';
 
 type DateBoundary = 'since' | 'until';
@@ -80,10 +80,42 @@ export function formatLocalMonthKey(date: Date): string {
 	return `${year}-${month}`;
 }
 
-export function parseDateFilterValue(value: string, boundary: DateBoundary): Date | null {
+export function parseDateFilterValue(
+	value: string,
+	boundary: DateBoundary,
+	referenceDate: Date = new Date(),
+): Date | null {
 	const trimmed = value.trim();
 	if (trimmed === '') {
 		return null;
+	}
+
+	const timeOnlyMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+	if (timeOnlyMatch != null) {
+		const hour = Number.parseInt(timeOnlyMatch[1] ?? '', 10);
+		const minute = Number.parseInt(timeOnlyMatch[2] ?? '', 10);
+		if (
+			!Number.isFinite(hour) ||
+			!Number.isFinite(minute) ||
+			hour < 0 ||
+			hour > 23 ||
+			minute < 0 ||
+			minute > 59
+		) {
+			return null;
+		}
+
+		const second = boundary === 'since' ? 0 : 59;
+		const millisecond = boundary === 'since' ? 0 : 999;
+		return buildLocalDate(
+			referenceDate.getFullYear(),
+			referenceDate.getMonth() + 1,
+			referenceDate.getDate(),
+			hour,
+			minute,
+			second,
+			millisecond,
+		);
 	}
 
 	const compactDateTimeMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/);
@@ -162,8 +194,9 @@ export function resolveDateRangeFilters(args: {
 		};
 	}
 
-	const sinceDate = sinceInput !== '' ? parseDateFilterValue(sinceInput, 'since') : null;
-	const untilDate = untilInput !== '' ? parseDateFilterValue(untilInput, 'until') : null;
+	const now = args.now ?? new Date();
+	const sinceDate = sinceInput !== '' ? parseDateFilterValue(sinceInput, 'since', now) : null;
+	const untilDate = untilInput !== '' ? parseDateFilterValue(untilInput, 'until', now) : null;
 
 	if (sinceInput !== '' && sinceDate == null) {
 		throw new Error(`Invalid --since value: ${sinceInput}. Use ${DATE_FILTER_FORMAT_HINT}.`);
@@ -193,5 +226,39 @@ export function filterEntriesByDateRange<T extends { timestamp: Date }>(
 			return false;
 		}
 		return true;
+	});
+}
+
+if (import.meta.vitest != null) {
+	const { describe, expect, it } = import.meta.vitest;
+
+	describe('parseDateFilterValue', () => {
+		it('parses time-only --since as today local time', () => {
+			const referenceDate = new Date('2026-03-01T12:30:00Z');
+			const parsed = parseDateFilterValue('05:00', 'since', referenceDate);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.getFullYear()).toBe(referenceDate.getFullYear());
+			expect(parsed?.getMonth()).toBe(referenceDate.getMonth());
+			expect(parsed?.getDate()).toBe(referenceDate.getDate());
+			expect(parsed?.getHours()).toBe(5);
+			expect(parsed?.getMinutes()).toBe(0);
+			expect(parsed?.getSeconds()).toBe(0);
+			expect(parsed?.getMilliseconds()).toBe(0);
+		});
+
+		it('parses time-only --until as end of minute today', () => {
+			const referenceDate = new Date('2026-03-01T12:30:00Z');
+			const parsed = parseDateFilterValue('05:00', 'until', referenceDate);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.getHours()).toBe(5);
+			expect(parsed?.getMinutes()).toBe(0);
+			expect(parsed?.getSeconds()).toBe(59);
+			expect(parsed?.getMilliseconds()).toBe(999);
+		});
+
+		it('rejects invalid time-only values', () => {
+			expect(parseDateFilterValue('25:00', 'since')).toBeNull();
+			expect(parseDateFilterValue('09:99', 'since')).toBeNull();
+		});
 	});
 }
