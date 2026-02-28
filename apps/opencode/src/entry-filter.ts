@@ -46,9 +46,9 @@ export function filterEntriesBySessionProjectFilters(
 	args: {
 		idInput: string;
 		projectInput: string;
-		modelInput: string;
-		providerInput: string;
-		fullModelInput: string;
+		modelInputs: string[];
+		providerInputs: string[];
+		fullModelInputs: string[];
 	},
 ): LoadedUsageEntry[] {
 	let filteredEntries = entries;
@@ -63,19 +63,21 @@ export function filterEntriesBySessionProjectFilters(
 		);
 	}
 
-	if (args.modelInput !== '') {
-		filteredEntries = filteredEntries.filter((entry) => matchesModelFilter(entry, args.modelInput));
-	}
-
-	if (args.providerInput !== '') {
+	if (args.modelInputs.length > 0) {
 		filteredEntries = filteredEntries.filter((entry) =>
-			matchesProviderFilter(entry, args.providerInput),
+			args.modelInputs.some((modelInput) => matchesModelFilter(entry, modelInput)),
 		);
 	}
 
-	if (args.fullModelInput !== '') {
+	if (args.providerInputs.length > 0) {
 		filteredEntries = filteredEntries.filter((entry) =>
-			matchesFullModelFilter(entry, args.fullModelInput),
+			args.providerInputs.some((providerInput) => matchesProviderFilter(entry, providerInput)),
+		);
+	}
+
+	if (args.fullModelInputs.length > 0) {
+		filteredEntries = filteredEntries.filter((entry) =>
+			args.fullModelInputs.some((fullModelInput) => matchesFullModelFilter(entry, fullModelInput)),
 		);
 	}
 
@@ -110,6 +112,23 @@ export function matchesFullModelFilter(entry: LoadedUsageEntry, fullModelFilter:
 	const fullModel = `${entry.source}/${entry.provider}/${normalizedModel}`.toLowerCase();
 
 	return fullModel.includes(fullModelFilter.toLowerCase());
+}
+
+export function parseFilterInputs(value: unknown): string[] {
+	if (typeof value === 'string') {
+		return value
+			.split(',')
+			.map((token) => token.trim())
+			.filter((token) => token !== '');
+	}
+
+	if (Array.isArray(value)) {
+		return value
+			.flatMap((item) => parseFilterInputs(item))
+			.filter((token, index, allTokens) => allTokens.indexOf(token) === index);
+	}
+
+	return [];
 }
 
 if (import.meta.vitest != null) {
@@ -172,6 +191,20 @@ if (import.meta.vitest != null) {
 
 		it('does not match mismatched source', () => {
 			expect(matchesFullModelFilter(baseEntry, 'claude/openai/gpt-5.3')).toBe(false);
+		});
+	});
+
+	describe('parseFilterInputs', () => {
+		it('splits comma-separated values', () => {
+			expect(parseFilterInputs('claude/,anthropic2')).toEqual(['claude/', 'anthropic2']);
+		});
+
+		it('handles repeated values arrays', () => {
+			expect(parseFilterInputs(['claude/', 'anthropic2'])).toEqual(['claude/', 'anthropic2']);
+		});
+
+		it('returns empty list for non-string values', () => {
+			expect(parseFilterInputs(undefined)).toEqual([]);
 		});
 	});
 }
