@@ -1,5 +1,5 @@
 export const DATE_FILTER_FORMAT_HINT =
-	'YYYYMMDD, YYYYMMDDHHMM, YYYY-MM-DD, YYYY-MM-DDTHH:MM, HH:MM, or ISO datetime';
+	'YYYYMMDD, YYYYMMDDHHMM, YYYY-MM-DD, YYYY-MM-DDTHH:MM, MMDD, MM-DD, MM-DDTHH:MM, HH:MM, or ISO datetime';
 export const LAST_DURATION_FORMAT_HINT = '15m, 2h, 3d, or 1w';
 
 type DateBoundary = 'since' | 'until';
@@ -41,28 +41,31 @@ function buildLocalDate(
 	return date;
 }
 
-function parseMatchedParts(
-	parts: RegExpMatchArray,
-	boundary: DateBoundary,
-	hasTime: boolean,
-): Date | null {
-	const year = Number.parseInt(parts[1] ?? '', 10);
-	const month = Number.parseInt(parts[2] ?? '', 10);
-	const day = Number.parseInt(parts[3] ?? '', 10);
+function parseDateValues(args: {
+	year: number;
+	month: number;
+	day: number;
+	boundary: DateBoundary;
+	hour?: number;
+	minute?: number;
+}): Date | null {
+	const year = args.year;
+	const month = args.month;
+	const day = args.day;
 
 	if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
 		return null;
 	}
 
-	const hour = hasTime ? Number.parseInt(parts[4] ?? '', 10) : boundary === 'since' ? 0 : 23;
-	const minute = hasTime ? Number.parseInt(parts[5] ?? '', 10) : boundary === 'since' ? 0 : 59;
+	const hour = args.hour ?? (args.boundary === 'since' ? 0 : 23);
+	const minute = args.minute ?? (args.boundary === 'since' ? 0 : 59);
 
 	if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
 		return null;
 	}
 
-	const second = boundary === 'since' ? 0 : 59;
-	const millisecond = boundary === 'since' ? 0 : 999;
+	const second = args.boundary === 'since' ? 0 : 59;
+	const millisecond = args.boundary === 'since' ? 0 : 999;
 
 	return buildLocalDate(year, month, day, hour, minute, second, millisecond);
 }
@@ -120,22 +123,78 @@ export function parseDateFilterValue(
 
 	const compactDateTimeMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/);
 	if (compactDateTimeMatch != null) {
-		return parseMatchedParts(compactDateTimeMatch, boundary, true);
+		return parseDateValues({
+			year: Number.parseInt(compactDateTimeMatch[1] ?? '', 10),
+			month: Number.parseInt(compactDateTimeMatch[2] ?? '', 10),
+			day: Number.parseInt(compactDateTimeMatch[3] ?? '', 10),
+			hour: Number.parseInt(compactDateTimeMatch[4] ?? '', 10),
+			minute: Number.parseInt(compactDateTimeMatch[5] ?? '', 10),
+			boundary,
+		});
 	}
 
 	const compactDateMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
 	if (compactDateMatch != null) {
-		return parseMatchedParts(compactDateMatch, boundary, false);
+		return parseDateValues({
+			year: Number.parseInt(compactDateMatch[1] ?? '', 10),
+			month: Number.parseInt(compactDateMatch[2] ?? '', 10),
+			day: Number.parseInt(compactDateMatch[3] ?? '', 10),
+			boundary,
+		});
+	}
+
+	const compactDateWithoutYearMatch = trimmed.match(/^(\d{2})(\d{2})$/);
+	if (compactDateWithoutYearMatch != null) {
+		return parseDateValues({
+			year: referenceDate.getFullYear(),
+			month: Number.parseInt(compactDateWithoutYearMatch[1] ?? '', 10),
+			day: Number.parseInt(compactDateWithoutYearMatch[2] ?? '', 10),
+			boundary,
+		});
 	}
 
 	const dashedDateTimeMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})$/);
 	if (dashedDateTimeMatch != null) {
-		return parseMatchedParts(dashedDateTimeMatch, boundary, true);
+		return parseDateValues({
+			year: Number.parseInt(dashedDateTimeMatch[1] ?? '', 10),
+			month: Number.parseInt(dashedDateTimeMatch[2] ?? '', 10),
+			day: Number.parseInt(dashedDateTimeMatch[3] ?? '', 10),
+			hour: Number.parseInt(dashedDateTimeMatch[4] ?? '', 10),
+			minute: Number.parseInt(dashedDateTimeMatch[5] ?? '', 10),
+			boundary,
+		});
 	}
 
 	const dashedDateMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (dashedDateMatch != null) {
-		return parseMatchedParts(dashedDateMatch, boundary, false);
+		return parseDateValues({
+			year: Number.parseInt(dashedDateMatch[1] ?? '', 10),
+			month: Number.parseInt(dashedDateMatch[2] ?? '', 10),
+			day: Number.parseInt(dashedDateMatch[3] ?? '', 10),
+			boundary,
+		});
+	}
+
+	const dashedDateTimeWithoutYearMatch = trimmed.match(/^(\d{1,2})-(\d{1,2})[ T](\d{2}):(\d{2})$/);
+	if (dashedDateTimeWithoutYearMatch != null) {
+		return parseDateValues({
+			year: referenceDate.getFullYear(),
+			month: Number.parseInt(dashedDateTimeWithoutYearMatch[1] ?? '', 10),
+			day: Number.parseInt(dashedDateTimeWithoutYearMatch[2] ?? '', 10),
+			hour: Number.parseInt(dashedDateTimeWithoutYearMatch[3] ?? '', 10),
+			minute: Number.parseInt(dashedDateTimeWithoutYearMatch[4] ?? '', 10),
+			boundary,
+		});
+	}
+
+	const dashedDateWithoutYearMatch = trimmed.match(/^(\d{1,2})-(\d{1,2})$/);
+	if (dashedDateWithoutYearMatch != null) {
+		return parseDateValues({
+			year: referenceDate.getFullYear(),
+			month: Number.parseInt(dashedDateWithoutYearMatch[1] ?? '', 10),
+			day: Number.parseInt(dashedDateWithoutYearMatch[2] ?? '', 10),
+			boundary,
+		});
 	}
 
 	const parsed = new Date(trimmed);
@@ -259,6 +318,46 @@ if (import.meta.vitest != null) {
 		it('rejects invalid time-only values', () => {
 			expect(parseDateFilterValue('25:00', 'since')).toBeNull();
 			expect(parseDateFilterValue('09:99', 'since')).toBeNull();
+		});
+
+		it('parses year-optional dashed date as current year', () => {
+			const referenceDate = new Date('2026-03-01T12:30:00Z');
+			const parsed = parseDateFilterValue('02-28', 'since', referenceDate);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.getFullYear()).toBe(referenceDate.getFullYear());
+			expect(parsed?.getMonth()).toBe(1);
+			expect(parsed?.getDate()).toBe(28);
+			expect(parsed?.getHours()).toBe(0);
+			expect(parsed?.getMinutes()).toBe(0);
+		});
+
+		it('parses year-optional dashed datetime as current year', () => {
+			const referenceDate = new Date('2026-03-01T12:30:00Z');
+			const parsed = parseDateFilterValue('02-28 05:45', 'since', referenceDate);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.getFullYear()).toBe(referenceDate.getFullYear());
+			expect(parsed?.getMonth()).toBe(1);
+			expect(parsed?.getDate()).toBe(28);
+			expect(parsed?.getHours()).toBe(5);
+			expect(parsed?.getMinutes()).toBe(45);
+		});
+
+		it('parses year-optional compact date as current year', () => {
+			const referenceDate = new Date('2026-03-01T12:30:00Z');
+			const parsed = parseDateFilterValue('0228', 'until', referenceDate);
+			expect(parsed).not.toBeNull();
+			expect(parsed?.getFullYear()).toBe(referenceDate.getFullYear());
+			expect(parsed?.getMonth()).toBe(1);
+			expect(parsed?.getDate()).toBe(28);
+			expect(parsed?.getHours()).toBe(23);
+			expect(parsed?.getMinutes()).toBe(59);
+			expect(parsed?.getSeconds()).toBe(59);
+			expect(parsed?.getMilliseconds()).toBe(999);
+		});
+
+		it('rejects invalid year-optional date in non-leap year', () => {
+			const referenceDate = new Date('2025-03-01T12:30:00Z');
+			expect(parseDateFilterValue('02-29', 'since', referenceDate)).toBeNull();
 		});
 	});
 }
