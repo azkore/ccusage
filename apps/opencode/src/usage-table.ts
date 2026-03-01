@@ -841,8 +841,8 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 				? ['left', 'left', 'right', 'right', 'right']
 				: ['left', 'right', 'right', 'right'],
 			head: hasModels
-				? [config.firstColumnName, 'Models', 'Input', 'Output', 'Cost (USD)']
-				: [config.firstColumnName, 'Input', 'Output', 'Cost (USD)'],
+				? [config.firstColumnName, 'Models', 'Input', 'Output', 'Cost']
+				: [config.firstColumnName, 'Input', 'Output', 'Cost'],
 		};
 		return new Table(compactOpts);
 	}
@@ -924,7 +924,7 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 				colSpan: baseColSpan + cacheCreateColSpan + cacheReadColSpan,
 				hAlign: 'center',
 			},
-			{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+			{ content: pc.cyan('Cost'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
 		);
 	} else {
 		headerRow1.push({ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
@@ -936,7 +936,7 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 		});
 		headerRow1.push(
 			{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
-			{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+			{ content: pc.cyan('Cost'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
 		);
 	}
 	table.push(headerRow1);
