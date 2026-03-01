@@ -135,6 +135,10 @@ function formatTierCell(
 	const pctSuffix = pctStr != null ? ` ${pctStr}` : '';
 
 	if (total <= 0) {
+		if (options.hideZeroDetail === true) {
+			return { tokenLine: '', costLine: null };
+		}
+
 		return { tokenLine: `${formatNumber(0)}${pctSuffix}`, costLine: null };
 	}
 
@@ -172,6 +176,10 @@ function formatBreakdownCell(
 	pctStr: string | undefined,
 	options: ValueDisplayOptions,
 ): string {
+	if (options.hideZeroDetail === true && tokens <= 0) {
+		return '';
+	}
+
 	const pctSuffix = pctStr == null ? '' : ` ${pctStr}`;
 
 	if (tier == null) {
@@ -209,7 +217,8 @@ export function buildOutputCells(
 		const { tokenLine, costLine } = formatTierCell(componentCosts.output, undefined, options);
 		outputContent = costLine != null ? `${tokenLine}\n${costLine}` : tokenLine;
 	} else {
-		outputContent = formatNumber(totalOutput);
+		outputContent =
+			options.hideZeroDetail === true && totalOutput <= 0 ? '' : formatNumber(totalOutput);
 	}
 
 	if (!showPercent) {
@@ -262,6 +271,10 @@ function formatAggregateCellWithCost(
 	cost: number | undefined,
 	options: ValueDisplayOptions,
 ): string {
+	if (options.hideZeroDetail === true && tokens <= 0 && (cost == null || cost <= 0)) {
+		return '';
+	}
+
 	const tokenPart = pctStr == null ? formatNumber(tokens) : `${formatNumber(tokens)} ${pctStr}`;
 	if (cost == null) {
 		return tokenPart;
@@ -279,6 +292,10 @@ function formatAggregateTokenWithCost(
 	cost: number | undefined,
 	options: ValueDisplayOptions,
 ): string {
+	if (options.hideZeroDetail === true && tokens <= 0 && (cost == null || cost <= 0)) {
+		return '';
+	}
+
 	const tokenPart = formatNumber(tokens);
 	if (cost == null) {
 		return tokenPart;
@@ -634,7 +651,8 @@ export function buildAggregateSummaryRow(
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
 		const totalOutput = data.outputTokens + data.reasoningTokens;
-		const outputStr = formatNumber(totalOutput);
+		const outputStr =
+			options.hideZeroDetail === true && totalOutput <= 0 ? '' : formatNumber(totalOutput);
 		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost, {
 			hideZeroDetail: options?.hideZeroDetail,
 		});

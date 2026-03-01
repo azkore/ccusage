@@ -383,6 +383,9 @@ export function formatInputColumn(
 	options?: { hideZeroDetail?: boolean },
 ): string {
 	const totalInput = totalInputTokens(data);
+	if (options?.hideZeroDetail === true && totalInput <= 0) {
+		return '';
+	}
 
 	if (componentCosts == null) {
 		return formatNumber(totalInput);
