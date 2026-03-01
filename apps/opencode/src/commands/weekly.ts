@@ -134,7 +134,7 @@ export const weeklyCommand = define({
 		breakdown: {
 			type: 'string',
 			description:
-				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, project, session. Use 'none' to disable.",
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, percent, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -157,20 +157,23 @@ export const weeklyCommand = define({
 		const breakdownInput =
 			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
 		const availableBreakdowns: Array<
-			'source' | 'provider' | 'model' | 'full-model' | 'cost' | 'project' | 'session'
-		> = ['source', 'provider', 'model', 'full-model', 'cost', 'project', 'session'];
+			'source' | 'provider' | 'model' | 'full-model' | 'cost' | 'percent' | 'project' | 'session'
+		> = ['source', 'provider', 'model', 'full-model', 'cost', 'percent', 'project', 'session'];
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
 			available: availableBreakdowns,
 		});
-		const groupingBreakdowns = breakdowns.filter((dimension) => dimension !== 'cost');
+		const groupingBreakdowns = breakdowns.filter(
+			(dimension) => dimension !== 'cost' && dimension !== 'percent',
+		);
 		const showBreakdown = groupingBreakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
 		const includeFullModel = breakdowns.includes('full-model');
 		const includeCost = breakdowns.includes('cost');
+		const includePercent = breakdowns.includes('percent');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -469,7 +472,11 @@ export const weeklyCommand = define({
 								fetcher,
 							);
 
-							table.push(buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts));
+							table.push(
+								buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts, {
+									showPercent: includePercent,
+								}),
+							);
 							continue;
 						}
 					}
@@ -482,12 +489,13 @@ export const weeklyCommand = define({
 							includeCost
 								? {
 										compact,
+										showPercent: includePercent,
 										columnCosts: await calculateAggregateComponentCostsFromEntries(
 											row.entries,
 											fetcher,
 										),
 									}
-								: { compact },
+								: { compact, showPercent: includePercent },
 						),
 					);
 				}

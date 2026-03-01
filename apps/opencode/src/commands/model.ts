@@ -117,7 +117,7 @@ export const modelCommand = define({
 		breakdown: {
 			type: 'string',
 			description:
-				"Choose breakdown dimensions (comma-separated): source, provider, full-model, cost, project, session. Use 'none' to disable.",
+				"Choose breakdown dimensions (comma-separated): source, provider, full-model, cost, percent, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -142,14 +142,17 @@ export const modelCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['source', 'provider', 'full-model', 'cost', 'project', 'session'],
+			available: ['source', 'provider', 'full-model', 'cost', 'percent', 'project', 'session'],
 		});
-		const groupingBreakdowns = breakdowns.filter((dimension) => dimension !== 'cost');
+		const groupingBreakdowns = breakdowns.filter(
+			(dimension) => dimension !== 'cost' && dimension !== 'percent',
+		);
 		const showBreakdown = groupingBreakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeFullModel = breakdowns.includes('full-model');
 		const includeCost = breakdowns.includes('cost');
+		const includePercent = breakdowns.includes('percent');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
 		const showProjectBreakdown = includeProject || includeSession;
@@ -502,6 +505,7 @@ export const modelCommand = define({
 							null,
 							row.totals,
 							componentCosts,
+							{ showPercent: includePercent },
 						),
 					);
 					continue;
@@ -510,6 +514,7 @@ export const modelCommand = define({
 				table.push(
 					buildAggregateSummaryRow(formatModelLabelForTable(row.label), null, row.totals, {
 						compact,
+						showPercent: includePercent,
 					}),
 				);
 			}

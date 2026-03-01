@@ -118,7 +118,7 @@ export const sessionCommand = define({
 		breakdown: {
 			type: 'string',
 			description:
-				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, project. Use 'none' to disable.",
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, percent, project. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -148,15 +148,18 @@ export const sessionCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['source', 'provider', 'model', 'full-model', 'cost', 'project'],
+			available: ['source', 'provider', 'model', 'full-model', 'cost', 'percent', 'project'],
 		});
-		const groupingBreakdowns = breakdowns.filter((dimension) => dimension !== 'cost');
+		const groupingBreakdowns = breakdowns.filter(
+			(dimension) => dimension !== 'cost' && dimension !== 'percent',
+		);
 		const showBreakdown = groupingBreakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
 		const includeFullModel = breakdowns.includes('full-model');
 		const includeCost = breakdowns.includes('cost');
+		const includePercent = breakdowns.includes('percent');
 		const includeProject = breakdowns.includes('project');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
@@ -466,6 +469,7 @@ export const sessionCommand = define({
 								'',
 								modelMetrics,
 								componentCosts,
+								{ showPercent: includePercent },
 							),
 						);
 						continue;
@@ -480,12 +484,13 @@ export const sessionCommand = define({
 						includeCost
 							? {
 									compact,
+									showPercent: includePercent,
 									columnCosts: await calculateAggregateComponentCostsFromEntries(
 										row.entries,
 										fetcher,
 									),
 								}
-							: { compact },
+							: { compact, showPercent: includePercent },
 					),
 				);
 			}

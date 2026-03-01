@@ -80,6 +80,18 @@ function formatPercent(numerator: number, denominator: number): string {
 	return pc.magenta(`${pct}%`);
 }
 
+function maybePercent(
+	numerator: number,
+	denominator: number,
+	showPercent: boolean,
+): string | undefined {
+	if (!showPercent) {
+		return undefined;
+	}
+
+	return formatPercent(numerator, denominator);
+}
+
 /**
  * Format a TierBreakdown as token line + cost line.
  * Token line includes percentage if provided.
@@ -126,10 +138,12 @@ function formatTierCell(
 function formatBreakdownCell(
 	tokens: number,
 	tier: TierBreakdown | undefined,
-	pctStr: string,
+	pctStr: string | undefined,
 ): string {
+	const pctSuffix = pctStr == null ? '' : ` ${pctStr}`;
+
 	if (tier == null) {
-		return `${formatNumber(tokens)} ${pctStr}`;
+		return `${formatNumber(tokens)}${pctSuffix}`;
 	}
 
 	const { tokenLine, costLine } = formatTierCell(tier, pctStr);
@@ -149,9 +163,14 @@ function formatBreakdownCell(
  * When reasoning > 0: two cells — total output with cost, reasoning count + pct.
  * When reasoning === 0: one cell with colSpan: 2.
  */
-export function buildOutputCells(data: ModelTokenData, componentCosts?: ComponentCosts): Cell[] {
+export function buildOutputCells(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+	options?: { showPercent?: boolean },
+): Cell[] {
 	const totalOutput = data.outputTokens + data.reasoningTokens;
 	const hasReasoning = data.reasoningTokens > 0;
+	const showPercent = options?.showPercent ?? true;
 
 	// Format the main output cell (total output tokens + cost)
 	let outputContent: string;
@@ -167,8 +186,11 @@ export function buildOutputCells(data: ModelTokenData, componentCosts?: Componen
 	}
 
 	// Reasoning cell: token count + percentage
-	const reasoningPct = formatPercent(data.reasoningTokens, totalOutput);
-	const reasoningContent = `${formatNumber(data.reasoningTokens)} ${reasoningPct}`;
+	const reasoningPct = maybePercent(data.reasoningTokens, totalOutput, showPercent);
+	const reasoningContent =
+		reasoningPct == null
+			? formatNumber(data.reasoningTokens)
+			: `${formatNumber(data.reasoningTokens)} ${reasoningPct}`;
 
 	return [
 		{ content: reasoningContent, hAlign: 'right' as const },
@@ -184,29 +206,36 @@ export function buildAggregateOutputCells(
 	outputTokens: number,
 	reasoningTokens: number,
 	outputCost?: number,
+	options?: { showPercent?: boolean },
 ): Cell[] {
 	const totalOutput = outputTokens + reasoningTokens;
 	const hasReasoning = reasoningTokens > 0;
+	const showPercent = options?.showPercent ?? true;
 	const outputContent = formatAggregateTokenWithCost(totalOutput, outputCost);
 
 	if (!hasReasoning) {
 		return [{ content: outputContent, colSpan: 2, hAlign: 'right' as const }];
 	}
 
-	const reasoningPct = formatPercent(reasoningTokens, totalOutput);
+	const reasoningPct = maybePercent(reasoningTokens, totalOutput, showPercent);
+
+	const reasoningContent =
+		reasoningPct == null
+			? formatNumber(reasoningTokens)
+			: `${formatNumber(reasoningTokens)} ${reasoningPct}`;
 
 	return [
-		{ content: `${formatNumber(reasoningTokens)} ${reasoningPct}`, hAlign: 'right' as const },
+		{ content: reasoningContent, hAlign: 'right' as const },
 		{ content: outputContent, hAlign: 'right' as const },
 	];
 }
 
 function formatAggregateCellWithCost(
 	tokens: number,
-	pctStr: string,
+	pctStr: string | undefined,
 	cost: number | undefined,
 ): string {
-	const tokenPart = `${formatNumber(tokens)} ${pctStr}`;
+	const tokenPart = pctStr == null ? formatNumber(tokens) : `${formatNumber(tokens)} ${pctStr}`;
 	if (cost == null) {
 		return tokenPart;
 	}
@@ -233,18 +262,23 @@ function formatAggregateTokenWithCost(tokens: number, cost: number | undefined):
  * Returns an array of either 3 cells (Anthropic: base, cache create, cache read)
  * or 2 cells where the first has colSpan: 2 (OpenAI: no cache create distinction).
  */
-export function buildBreakdownCells(data: ModelTokenData, componentCosts?: ComponentCosts): Cell[] {
+export function buildBreakdownCells(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+	options?: { showPercent?: boolean },
+): Cell[] {
 	const total = totalInputTokens(data);
 	const hasCacheCreate = data.cacheCreationTokens > 0;
+	const showPercent = options?.showPercent ?? true;
 
-	const basePct = formatPercent(data.inputTokens, total);
-	const ccPct = formatPercent(data.cacheCreationTokens, total);
-	const crPct = formatPercent(data.cacheReadTokens, total);
+	const basePct = maybePercent(data.inputTokens, total, showPercent);
+	const ccPct = maybePercent(data.cacheCreationTokens, total, showPercent);
+	const crPct = maybePercent(data.cacheReadTokens, total, showPercent);
 
 	if (!hasCacheCreate) {
 		// OpenAI-style: merge base + cache create into one colSpan: 2 cell
 		const uncachedTokens = data.inputTokens + data.cacheCreationTokens;
-		const uncachedPct = formatPercent(uncachedTokens, total);
+		const uncachedPct = maybePercent(uncachedTokens, total, showPercent);
 		const content = formatBreakdownCell(
 			uncachedTokens,
 			componentCosts != null
@@ -292,22 +326,22 @@ export function buildBreakdownCells(data: ModelTokenData, componentCosts?: Compo
 /**
  * Build breakdown cells for an aggregate (mixed-model) row.
  * No cost rates — just token counts with percentages on the token line.
- * TODO(opencode): Support a dedicated percent display toggle in --breakdown
- * and allow hiding percentages by default.
  */
 export function buildAggregateBreakdownCells(
 	inputTokens: number,
 	cacheCreationTokens: number,
 	cacheReadTokens: number,
 	costs?: Pick<AggregateColumnCosts, 'baseInputCost' | 'cacheCreateCost' | 'cacheReadCost'>,
+	options?: { showPercent?: boolean },
 ): Cell[] {
 	const total = inputTokens + cacheCreationTokens + cacheReadTokens;
 	const hasCacheCreate = cacheCreationTokens > 0;
+	const showPercent = options?.showPercent ?? true;
 
 	if (!hasCacheCreate) {
 		const uncachedTokens = inputTokens + cacheCreationTokens;
-		const uncachedPct = formatPercent(uncachedTokens, total);
-		const crPct = formatPercent(cacheReadTokens, total);
+		const uncachedPct = maybePercent(uncachedTokens, total, showPercent);
+		const crPct = maybePercent(cacheReadTokens, total, showPercent);
 		const uncachedCost = (costs?.baseInputCost ?? 0) + (costs?.cacheCreateCost ?? 0);
 
 		return [
@@ -323,9 +357,9 @@ export function buildAggregateBreakdownCells(
 		];
 	}
 
-	const basePct = formatPercent(inputTokens, total);
-	const ccPct = formatPercent(cacheCreationTokens, total);
-	const crPct = formatPercent(cacheReadTokens, total);
+	const basePct = maybePercent(inputTokens, total, showPercent);
+	const ccPct = maybePercent(cacheCreationTokens, total, showPercent);
+	const crPct = maybePercent(cacheReadTokens, total, showPercent);
 
 	return [
 		{
@@ -457,9 +491,14 @@ export function buildModelBreakdownRow(
 	modelsCell: string | null,
 	data: ModelTokenData,
 	componentCosts: ComponentCosts | undefined,
+	options?: { showPercent?: boolean },
 ): Row {
-	const outputCells = buildOutputCells(data, componentCosts);
-	const breakdownCells = buildBreakdownCells(data, componentCosts);
+	const outputCells = buildOutputCells(data, componentCosts, {
+		showPercent: options?.showPercent,
+	});
+	const breakdownCells = buildBreakdownCells(data, componentCosts, {
+		showPercent: options?.showPercent,
+	});
 	const row: Cell[] = [firstCell];
 	if (modelsCell != null) {
 		row.push(modelsCell);
@@ -492,6 +531,7 @@ export function buildAggregateSummaryRow(
 		yellow?: boolean;
 		compact?: boolean;
 		columnCosts?: AggregateColumnCosts;
+		showPercent?: boolean;
 	},
 ): Row {
 	const wrap = (s: string): string => {
@@ -520,9 +560,16 @@ export function buildAggregateSummaryRow(
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
 		const totalOutput = data.outputTokens + data.reasoningTokens;
+		const reasoningPct = maybePercent(
+			data.reasoningTokens,
+			totalOutput,
+			options?.showPercent ?? true,
+		);
 		const outputStr =
 			data.reasoningTokens > 0
-				? `${formatNumber(totalOutput)} ${formatPercent(data.reasoningTokens, totalOutput)}`
+				? reasoningPct == null
+					? formatNumber(totalOutput)
+					: `${formatNumber(totalOutput)} ${reasoningPct}`
 				: formatNumber(totalOutput);
 		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost);
 		const outputContent =
@@ -541,6 +588,7 @@ export function buildAggregateSummaryRow(
 		data.outputTokens,
 		data.reasoningTokens,
 		options?.columnCosts?.outputCost,
+		{ showPercent: options?.showPercent },
 	);
 	const breakdownCells = buildAggregateBreakdownCells(
 		data.inputTokens,
@@ -553,6 +601,7 @@ export function buildAggregateSummaryRow(
 					cacheCreateCost: options.columnCosts.cacheCreateCost,
 					cacheReadCost: options.columnCosts.cacheReadCost,
 				},
+		{ showPercent: options?.showPercent },
 	);
 
 	// Wrap cell content with styling

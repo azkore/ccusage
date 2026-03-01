@@ -6,6 +6,7 @@ export type BreakdownDimension =
 	| 'model'
 	| 'full-model'
 	| 'cost'
+	| 'percent'
 	| 'project'
 	| 'session';
 
