@@ -395,21 +395,34 @@ export const weeklyCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Week',
 			hasModelsColumn: true,
+			showPercent: includePercent,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const visibleEntriesForTotals = visibleWeeklyData.flatMap(
+			(data) => entriesByWeek[data.week] ?? [],
+		);
+		const totalsColumnCosts = includeCost
+			? await calculateAggregateComponentCostsFromEntries(visibleEntriesForTotals, fetcher)
+			: undefined;
 
 		for (const data of visibleWeeklyData) {
+			const weekEntries = entriesByWeek[data.week] ?? [];
+			const summaryColumnCosts = includeCost
+				? await calculateAggregateComponentCostsFromEntries(weekEntries, fetcher)
+				: undefined;
+
 			table.push(
 				buildAggregateSummaryRow(data.week, 'Weekly Total', data, {
 					bold: true,
 					compact,
 					showPercent: includePercent,
+					hideZeroDetail: skipZero,
+					columnCosts: summaryColumnCosts,
 				}),
 			);
 
 			if (!compact && showBreakdown) {
-				const weekEntries = entriesByWeek[data.week] ?? [];
 				const groupedEntries = groupBy(weekEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -479,6 +492,7 @@ export const weeklyCommand = define({
 							table.push(
 								buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts, {
 									showPercent: includePercent,
+									hideZeroDetail: skipZero,
 								}),
 							);
 							continue;
@@ -494,12 +508,13 @@ export const weeklyCommand = define({
 								? {
 										compact,
 										showPercent: includePercent,
+										hideZeroDetail: skipZero,
 										columnCosts: await calculateAggregateComponentCostsFromEntries(
 											row.entries,
 											fetcher,
 										),
 									}
-								: { compact, showPercent: includePercent },
+								: { compact, showPercent: includePercent, hideZeroDetail: skipZero },
 						),
 					);
 				}
@@ -511,6 +526,8 @@ export const weeklyCommand = define({
 				yellow: true,
 				compact,
 				showPercent: includePercent,
+				hideZeroDetail: skipZero,
+				columnCosts: totalsColumnCosts,
 			}),
 		);
 

@@ -10,6 +10,7 @@ import {
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
 import {
+	calculateAggregateComponentCostsFromEntries,
 	calculateComponentCostsFromEntries,
 	calculateCostForEntry,
 	totalInputTokens,
@@ -48,7 +49,7 @@ type ProjectBreakdown = ModelTokenData & {
 export const modelCommand = define({
 	name: 'model',
 	description:
-		'Show OpenCode token usage grouped by model. Per-model rate details ($/M→$...) are shown by default; use --breakdown for extra grouping.',
+		'Show OpenCode token usage grouped by model. Use --breakdown cost to include per-column cost details and model rates ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -418,9 +419,14 @@ export const modelCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Model',
 			hasModelsColumn: false,
+			showPercent: includePercent,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const visibleEntriesForTotals = visibleModelData.flatMap((data) => data.entries);
+		const totalsColumnCosts = includeCost
+			? await calculateAggregateComponentCostsFromEntries(visibleEntriesForTotals, fetcher)
+			: undefined;
 
 		const aggregateEntries = (entries: LoadedUsageEntry[]) => {
 			let inputTokens = 0;
@@ -505,7 +511,7 @@ export const modelCommand = define({
 							null,
 							row.totals,
 							componentCosts,
-							{ showPercent: includePercent },
+							{ showPercent: includePercent, hideZeroDetail: skipZero },
 						),
 					);
 					continue;
@@ -515,6 +521,7 @@ export const modelCommand = define({
 					buildAggregateSummaryRow(formatModelLabelForTable(row.label), null, row.totals, {
 						compact,
 						showPercent: includePercent,
+						hideZeroDetail: skipZero,
 					}),
 				);
 			}
@@ -526,8 +533,8 @@ export const modelCommand = define({
 						pc.bold(formatModelLabelForTable(data.model)),
 						null,
 						data,
-						data.componentCosts,
-						{ showPercent: includePercent },
+						includeCost ? data.componentCosts : undefined,
+						{ showPercent: includePercent, hideZeroDetail: skipZero },
 					),
 				);
 			}
@@ -538,6 +545,8 @@ export const modelCommand = define({
 				yellow: true,
 				compact,
 				showPercent: includePercent,
+				hideZeroDetail: skipZero,
+				columnCosts: totalsColumnCosts,
 			}),
 		);
 

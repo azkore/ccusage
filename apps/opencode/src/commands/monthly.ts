@@ -376,21 +376,34 @@ export const monthlyCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Month',
 			hasModelsColumn: true,
+			showPercent: includePercent,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const visibleEntriesForTotals = visibleMonthlyData.flatMap(
+			(data) => entriesByMonth[data.month] ?? [],
+		);
+		const totalsColumnCosts = includeCost
+			? await calculateAggregateComponentCostsFromEntries(visibleEntriesForTotals, fetcher)
+			: undefined;
 
 		for (const data of visibleMonthlyData) {
+			const monthEntries = entriesByMonth[data.month] ?? [];
+			const summaryColumnCosts = includeCost
+				? await calculateAggregateComponentCostsFromEntries(monthEntries, fetcher)
+				: undefined;
+
 			table.push(
 				buildAggregateSummaryRow(data.month, 'Monthly Total', data, {
 					bold: true,
 					compact,
 					showPercent: includePercent,
+					hideZeroDetail: skipZero,
+					columnCosts: summaryColumnCosts,
 				}),
 			);
 
 			if (!compact && showBreakdown) {
-				const monthEntries = entriesByMonth[data.month] ?? [];
 				const groupedEntries = groupBy(monthEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -460,6 +473,7 @@ export const monthlyCommand = define({
 							table.push(
 								buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts, {
 									showPercent: includePercent,
+									hideZeroDetail: skipZero,
 								}),
 							);
 							continue;
@@ -475,12 +489,13 @@ export const monthlyCommand = define({
 								? {
 										compact,
 										showPercent: includePercent,
+										hideZeroDetail: skipZero,
 										columnCosts: await calculateAggregateComponentCostsFromEntries(
 											row.entries,
 											fetcher,
 										),
 									}
-								: { compact, showPercent: includePercent },
+								: { compact, showPercent: includePercent, hideZeroDetail: skipZero },
 						),
 					);
 				}
@@ -492,6 +507,8 @@ export const monthlyCommand = define({
 				yellow: true,
 				compact,
 				showPercent: includePercent,
+				hideZeroDetail: skipZero,
+				columnCosts: totalsColumnCosts,
 			}),
 		);
 

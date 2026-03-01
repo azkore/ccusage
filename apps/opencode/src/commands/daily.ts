@@ -374,22 +374,35 @@ export const dailyCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Date',
 			hasModelsColumn: true,
+			showPercent: includePercent,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const visibleEntriesForTotals = visibleDailyData.flatMap(
+			(data) => entriesByDate[data.date] ?? [],
+		);
+		const totalsColumnCosts = includeCost
+			? await calculateAggregateComponentCostsFromEntries(visibleEntriesForTotals, fetcher)
+			: undefined;
 
 		for (const data of visibleDailyData) {
+			const dayEntries = entriesByDate[data.date] ?? [];
+			const summaryColumnCosts = includeCost
+				? await calculateAggregateComponentCostsFromEntries(dayEntries, fetcher)
+				: undefined;
+
 			// Summary Row (no $/M rates — mixed models)
 			table.push(
 				buildAggregateSummaryRow(data.date, 'Daily Total', data, {
 					bold: true,
 					compact,
 					showPercent: includePercent,
+					hideZeroDetail: skipZero,
+					columnCosts: summaryColumnCosts,
 				}),
 			);
 
 			if (!compact && showBreakdown) {
-				const dayEntries = entriesByDate[data.date] ?? [];
 				const groupedEntries = groupBy(dayEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -459,6 +472,7 @@ export const dailyCommand = define({
 							table.push(
 								buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts, {
 									showPercent: includePercent,
+									hideZeroDetail: skipZero,
 								}),
 							);
 							continue;
@@ -474,12 +488,13 @@ export const dailyCommand = define({
 								? {
 										compact,
 										showPercent: includePercent,
+										hideZeroDetail: skipZero,
 										columnCosts: await calculateAggregateComponentCostsFromEntries(
 											row.entries,
 											fetcher,
 										),
 									}
-								: { compact, showPercent: includePercent },
+								: { compact, showPercent: includePercent, hideZeroDetail: skipZero },
 						),
 					);
 				}
@@ -491,6 +506,8 @@ export const dailyCommand = define({
 				yellow: true,
 				compact,
 				showPercent: includePercent,
+				hideZeroDetail: skipZero,
+				columnCosts: totalsColumnCosts,
 			}),
 		);
 

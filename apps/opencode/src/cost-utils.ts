@@ -377,7 +377,11 @@ export function totalInputTokens(data: {
 // ---------------------------------------------------------------------------
 
 /** Input Total: value + real effective rate/cost. */
-export function formatInputColumn(data: ModelTokenData, componentCosts?: ComponentCosts): string {
+export function formatInputColumn(
+	data: ModelTokenData,
+	componentCosts?: ComponentCosts,
+	options?: { hideZeroDetail?: boolean },
+): string {
 	const totalInput = totalInputTokens(data);
 
 	if (componentCosts == null) {
@@ -388,6 +392,10 @@ export function formatInputColumn(data: ModelTokenData, componentCosts?: Compone
 		tierTotalCost(componentCosts.baseInput) +
 		tierTotalCost(componentCosts.cacheCreate) +
 		tierTotalCost(componentCosts.cacheRead);
+	if (options?.hideZeroDetail === true && totalInputCost <= 0) {
+		return formatNumber(totalInput);
+	}
+
 	const realRate = formatRateNumber(totalInputCost, totalInput);
 	return `${formatNumber(totalInput)}\n$${realRate}/M→${pc.green(formatCurrencyValue(totalInputCost))}`;
 }

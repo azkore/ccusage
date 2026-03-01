@@ -26,6 +26,11 @@ import { formatInputColumn, totalInputTokens } from './cost-utils.ts';
 type Cell = string | CellOptions;
 type Row = Cell[];
 
+type ValueDisplayOptions = {
+	showPercent?: boolean;
+	hideZeroDetail?: boolean;
+};
+
 export type AggregateColumnCosts = {
 	inputCost: number;
 	outputCost: number;
@@ -39,6 +44,8 @@ export type UsageTableConfig = {
 	firstColumnName: string;
 	/** Whether to include a "Models" column (false for model.ts which IS per-model) */
 	hasModelsColumn?: boolean;
+	/** Whether percentage columns/details are enabled */
+	showPercent?: boolean;
 	/** Force compact mode (hide breakdown columns) */
 	forceCompact?: boolean;
 };
@@ -65,27 +72,48 @@ function formatCurrencyValue(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
-function formatSingleTierCost(ratePerMillion: number | null, cost: number): string {
+function formatSingleTierCost(
+	ratePerMillion: number | null,
+	cost: number,
+	options: ValueDisplayOptions,
+): string | null {
+	if (options.hideZeroDetail === true && cost <= 0) {
+		return null;
+	}
+
 	if (ratePerMillion == null) {
 		return pc.green(formatCurrencyValue(cost));
 	}
 	return `$${formatListRate(ratePerMillion)}/M→${pc.green(formatCurrencyValue(cost))}`;
 }
 
-function formatPercent(numerator: number, denominator: number): string {
+function roundedPercent(numerator: number, denominator: number): number {
 	if (denominator <= 0) {
-		return pc.magenta('0%');
+		return 0;
 	}
-	const pct = Math.round((numerator / denominator) * 100);
+
+	return Math.round((numerator / denominator) * 100);
+}
+
+function formatPercent(numerator: number, denominator: number): string {
+	const pct = roundedPercent(numerator, denominator);
 	return pc.magenta(`${pct}%`);
 }
 
 function maybePercent(
 	numerator: number,
 	denominator: number,
-	showPercent: boolean,
+	options: ValueDisplayOptions,
 ): string | undefined {
-	if (!showPercent) {
+	if (options.showPercent !== true) {
+		return undefined;
+	}
+
+	if (options.hideZeroDetail === true && (numerator <= 0 || denominator <= 0)) {
+		return undefined;
+	}
+
+	if (options.hideZeroDetail === true && roundedPercent(numerator, denominator) === 0) {
 		return undefined;
 	}
 
@@ -99,6 +127,7 @@ function maybePercent(
 function formatTierCell(
 	tier: TierBreakdown,
 	pctStr?: string,
+	options: ValueDisplayOptions = {},
 ): { tokenLine: string; costLine: string | null } {
 	const total = tierTotalTokens(tier);
 	const cost = tierTotalCost(tier);
@@ -116,17 +145,19 @@ function formatTierCell(
 			: `${formatNumber(total)}${pctSuffix}`;
 
 	if (tier.aboveTierTokens <= 0) {
+		const costLine = formatSingleTierCost(tier.baseTierRate, cost, options);
 		return {
 			tokenLine,
-			costLine: formatSingleTierCost(tier.baseTierRate, cost),
+			costLine,
 		};
 	}
 
-	const basePart = formatSingleTierCost(tier.baseTierRate, tier.baseTierCost);
-	const abovePart = formatSingleTierCost(tier.aboveTierRate, tier.aboveTierCost);
+	const basePart = formatSingleTierCost(tier.baseTierRate, tier.baseTierCost, options);
+	const abovePart = formatSingleTierCost(tier.aboveTierRate, tier.aboveTierCost, options);
+	const costParts = [basePart, abovePart].filter((part): part is string => part != null);
 	return {
 		tokenLine,
-		costLine: `${basePart} ${abovePart}`,
+		costLine: costParts.length > 0 ? costParts.join(' ') : null,
 	};
 }
 
@@ -139,6 +170,7 @@ function formatBreakdownCell(
 	tokens: number,
 	tier: TierBreakdown | undefined,
 	pctStr: string | undefined,
+	options: ValueDisplayOptions,
 ): string {
 	const pctSuffix = pctStr == null ? '' : ` ${pctStr}`;
 
@@ -146,7 +178,7 @@ function formatBreakdownCell(
 		return `${formatNumber(tokens)}${pctSuffix}`;
 	}
 
-	const { tokenLine, costLine } = formatTierCell(tier, pctStr);
+	const { tokenLine, costLine } = formatTierCell(tier, pctStr, options);
 	if (costLine == null) {
 		return tokenLine;
 	}
@@ -166,34 +198,31 @@ function formatBreakdownCell(
 export function buildOutputCells(
 	data: ModelTokenData,
 	componentCosts?: ComponentCosts,
-	options?: { showPercent?: boolean },
+	options: ValueDisplayOptions = {},
 ): Cell[] {
 	const totalOutput = data.outputTokens + data.reasoningTokens;
-	const hasReasoning = data.reasoningTokens > 0;
-	const showPercent = options?.showPercent ?? true;
+	const showPercent = options.showPercent ?? true;
 
 	// Format the main output cell (total output tokens + cost)
 	let outputContent: string;
 	if (componentCosts != null && totalOutput > 0) {
-		const { tokenLine, costLine } = formatTierCell(componentCosts.output);
+		const { tokenLine, costLine } = formatTierCell(componentCosts.output, undefined, options);
 		outputContent = costLine != null ? `${tokenLine}\n${costLine}` : tokenLine;
 	} else {
 		outputContent = formatNumber(totalOutput);
 	}
 
-	if (!hasReasoning) {
-		return [{ content: outputContent, colSpan: 2, hAlign: 'right' as const }];
+	if (!showPercent) {
+		return [{ content: outputContent, hAlign: 'right' as const }];
 	}
 
-	// Reasoning cell: token count + percentage
-	const reasoningPct = maybePercent(data.reasoningTokens, totalOutput, showPercent);
-	const reasoningContent =
-		reasoningPct == null
-			? formatNumber(data.reasoningTokens)
-			: `${formatNumber(data.reasoningTokens)} ${reasoningPct}`;
+	const reasoningPct = maybePercent(data.reasoningTokens, totalOutput, {
+		showPercent: true,
+		hideZeroDetail: options.hideZeroDetail,
+	});
 
 	return [
-		{ content: reasoningContent, hAlign: 'right' as const },
+		{ content: reasoningPct ?? '', hAlign: 'right' as const },
 		{ content: outputContent, hAlign: 'right' as const },
 	];
 }
@@ -206,26 +235,23 @@ export function buildAggregateOutputCells(
 	outputTokens: number,
 	reasoningTokens: number,
 	outputCost?: number,
-	options?: { showPercent?: boolean },
+	options: ValueDisplayOptions = {},
 ): Cell[] {
 	const totalOutput = outputTokens + reasoningTokens;
-	const hasReasoning = reasoningTokens > 0;
-	const showPercent = options?.showPercent ?? true;
-	const outputContent = formatAggregateTokenWithCost(totalOutput, outputCost);
+	const showPercent = options.showPercent ?? true;
+	const outputContent = formatAggregateTokenWithCost(totalOutput, outputCost, options);
 
-	if (!hasReasoning) {
-		return [{ content: outputContent, colSpan: 2, hAlign: 'right' as const }];
+	if (!showPercent) {
+		return [{ content: outputContent, hAlign: 'right' as const }];
 	}
 
-	const reasoningPct = maybePercent(reasoningTokens, totalOutput, showPercent);
-
-	const reasoningContent =
-		reasoningPct == null
-			? formatNumber(reasoningTokens)
-			: `${formatNumber(reasoningTokens)} ${reasoningPct}`;
+	const reasoningPct = maybePercent(reasoningTokens, totalOutput, {
+		showPercent: true,
+		hideZeroDetail: options.hideZeroDetail,
+	});
 
 	return [
-		{ content: reasoningContent, hAlign: 'right' as const },
+		{ content: reasoningPct ?? '', hAlign: 'right' as const },
 		{ content: outputContent, hAlign: 'right' as const },
 	];
 }
@@ -234,18 +260,31 @@ function formatAggregateCellWithCost(
 	tokens: number,
 	pctStr: string | undefined,
 	cost: number | undefined,
+	options: ValueDisplayOptions,
 ): string {
 	const tokenPart = pctStr == null ? formatNumber(tokens) : `${formatNumber(tokens)} ${pctStr}`;
 	if (cost == null) {
 		return tokenPart;
 	}
 
+	if (options.hideZeroDetail === true && cost <= 0) {
+		return tokenPart;
+	}
+
 	return `${tokenPart} ${pc.green(formatCurrencyValue(cost))}`;
 }
 
-function formatAggregateTokenWithCost(tokens: number, cost: number | undefined): string {
+function formatAggregateTokenWithCost(
+	tokens: number,
+	cost: number | undefined,
+	options: ValueDisplayOptions,
+): string {
 	const tokenPart = formatNumber(tokens);
 	if (cost == null) {
+		return tokenPart;
+	}
+
+	if (options.hideZeroDetail === true && cost <= 0) {
 		return tokenPart;
 	}
 
@@ -265,20 +304,19 @@ function formatAggregateTokenWithCost(tokens: number, cost: number | undefined):
 export function buildBreakdownCells(
 	data: ModelTokenData,
 	componentCosts?: ComponentCosts,
-	options?: { showPercent?: boolean },
+	options: ValueDisplayOptions = {},
 ): Cell[] {
 	const total = totalInputTokens(data);
 	const hasCacheCreate = data.cacheCreationTokens > 0;
-	const showPercent = options?.showPercent ?? true;
 
-	const basePct = maybePercent(data.inputTokens, total, showPercent);
-	const ccPct = maybePercent(data.cacheCreationTokens, total, showPercent);
-	const crPct = maybePercent(data.cacheReadTokens, total, showPercent);
+	const basePct = maybePercent(data.inputTokens, total, options);
+	const ccPct = maybePercent(data.cacheCreationTokens, total, options);
+	const crPct = maybePercent(data.cacheReadTokens, total, options);
 
 	if (!hasCacheCreate) {
 		// OpenAI-style: merge base + cache create into one colSpan: 2 cell
 		const uncachedTokens = data.inputTokens + data.cacheCreationTokens;
-		const uncachedPct = maybePercent(uncachedTokens, total, showPercent);
+		const uncachedPct = maybePercent(uncachedTokens, total, options);
 		const content = formatBreakdownCell(
 			uncachedTokens,
 			componentCosts != null
@@ -297,9 +335,15 @@ export function buildBreakdownCells(
 					}
 				: undefined,
 			uncachedPct,
+			options,
 		);
 
-		const crContent = formatBreakdownCell(data.cacheReadTokens, componentCosts?.cacheRead, crPct);
+		const crContent = formatBreakdownCell(
+			data.cacheReadTokens,
+			componentCosts?.cacheRead,
+			crPct,
+			options,
+		);
 
 		return [
 			{ content, colSpan: 2, hAlign: 'right' as const },
@@ -308,13 +352,24 @@ export function buildBreakdownCells(
 	}
 
 	// Anthropic-style: three separate cells
-	const baseContent = formatBreakdownCell(data.inputTokens, componentCosts?.baseInput, basePct);
+	const baseContent = formatBreakdownCell(
+		data.inputTokens,
+		componentCosts?.baseInput,
+		basePct,
+		options,
+	);
 	const ccContent = formatBreakdownCell(
 		data.cacheCreationTokens,
 		componentCosts?.cacheCreate,
 		ccPct,
+		options,
 	);
-	const crContent = formatBreakdownCell(data.cacheReadTokens, componentCosts?.cacheRead, crPct);
+	const crContent = formatBreakdownCell(
+		data.cacheReadTokens,
+		componentCosts?.cacheRead,
+		crPct,
+		options,
+	);
 
 	return [
 		{ content: baseContent, hAlign: 'right' as const },
@@ -332,46 +387,50 @@ export function buildAggregateBreakdownCells(
 	cacheCreationTokens: number,
 	cacheReadTokens: number,
 	costs?: Pick<AggregateColumnCosts, 'baseInputCost' | 'cacheCreateCost' | 'cacheReadCost'>,
-	options?: { showPercent?: boolean },
+	options: ValueDisplayOptions = {},
 ): Cell[] {
 	const total = inputTokens + cacheCreationTokens + cacheReadTokens;
 	const hasCacheCreate = cacheCreationTokens > 0;
-	const showPercent = options?.showPercent ?? true;
 
 	if (!hasCacheCreate) {
 		const uncachedTokens = inputTokens + cacheCreationTokens;
-		const uncachedPct = maybePercent(uncachedTokens, total, showPercent);
-		const crPct = maybePercent(cacheReadTokens, total, showPercent);
+		const uncachedPct = maybePercent(uncachedTokens, total, options);
+		const crPct = maybePercent(cacheReadTokens, total, options);
 		const uncachedCost = (costs?.baseInputCost ?? 0) + (costs?.cacheCreateCost ?? 0);
 
 		return [
 			{
-				content: formatAggregateCellWithCost(uncachedTokens, uncachedPct, uncachedCost),
+				content: formatAggregateCellWithCost(uncachedTokens, uncachedPct, uncachedCost, options),
 				colSpan: 2,
 				hAlign: 'right' as const,
 			},
 			{
-				content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost),
+				content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost, options),
 				hAlign: 'right' as const,
 			},
 		];
 	}
 
-	const basePct = maybePercent(inputTokens, total, showPercent);
-	const ccPct = maybePercent(cacheCreationTokens, total, showPercent);
-	const crPct = maybePercent(cacheReadTokens, total, showPercent);
+	const basePct = maybePercent(inputTokens, total, options);
+	const ccPct = maybePercent(cacheCreationTokens, total, options);
+	const crPct = maybePercent(cacheReadTokens, total, options);
 
 	return [
 		{
-			content: formatAggregateCellWithCost(inputTokens, basePct, costs?.baseInputCost),
+			content: formatAggregateCellWithCost(inputTokens, basePct, costs?.baseInputCost, options),
 			hAlign: 'right' as const,
 		},
 		{
-			content: formatAggregateCellWithCost(cacheCreationTokens, ccPct, costs?.cacheCreateCost),
+			content: formatAggregateCellWithCost(
+				cacheCreationTokens,
+				ccPct,
+				costs?.cacheCreateCost,
+				options,
+			),
 			hAlign: 'right' as const,
 		},
 		{
-			content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost),
+			content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost, options),
 			hAlign: 'right' as const,
 		},
 	];
@@ -417,6 +476,7 @@ export function remapTokensForAggregate(entry: {
  */
 export function createUsageTable(config: UsageTableConfig): Table.Table {
 	const hasModels = config.hasModelsColumn ?? true;
+	const showPercent = config.showPercent ?? false;
 
 	const terminalWidth =
 		Number.parseInt(process.env.COLUMNS ?? '', 10) || process.stdout.columns || 120;
@@ -430,8 +490,8 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 				? ['left', 'left', 'right', 'right', 'right']
 				: ['left', 'right', 'right', 'right'],
 			head: hasModels
-				? [config.firstColumnName, 'Models', 'Input', 'Output/Reasoning%', 'Cost (USD)']
-				: [config.firstColumnName, 'Input', 'Output/Reasoning%', 'Cost (USD)'],
+				? [config.firstColumnName, 'Models', 'Input', 'Output', 'Cost (USD)']
+				: [config.firstColumnName, 'Input', 'Output', 'Cost (USD)'],
 		};
 		return new Table(compactOpts);
 	}
@@ -449,22 +509,34 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 	if (hasModels) {
 		headerRow1.push({ content: pc.cyan('Models'), rowSpan: 2, vAlign: 'center' });
 	}
+	headerRow1.push({ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
+	if (showPercent) {
+		headerRow1.push({ content: pc.cyan('Output'), colSpan: 2, hAlign: 'center' });
+	} else {
+		headerRow1.push({ content: pc.cyan('Output'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
+	}
 	headerRow1.push(
-		{ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
-		{ content: pc.cyan('Output'), colSpan: 2, hAlign: 'center' },
 		{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
 		{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
 	);
 	table.push(headerRow1);
 
 	// --- Row 2: sub-headers for Output and Input Breakdown columns ---
-	table.push([
-		{ content: pc.cyan('Reasoning'), hAlign: 'right' },
-		{ content: pc.cyan('Total'), hAlign: 'right' },
-		{ content: pc.cyan('Base'), hAlign: 'right' },
-		{ content: pc.cyan('Cache Create'), hAlign: 'right' },
-		{ content: pc.cyan('Cache Read'), hAlign: 'right' },
-	]);
+	if (showPercent) {
+		table.push([
+			{ content: pc.cyan('Reason%'), hAlign: 'right' },
+			{ content: pc.cyan('Total'), hAlign: 'right' },
+			{ content: pc.cyan('Base'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Create'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Read'), hAlign: 'right' },
+		]);
+	} else {
+		table.push([
+			{ content: pc.cyan('Base'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Create'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Read'), hAlign: 'right' },
+		]);
+	}
 
 	return table;
 }
@@ -491,20 +563,21 @@ export function buildModelBreakdownRow(
 	modelsCell: string | null,
 	data: ModelTokenData,
 	componentCosts: ComponentCosts | undefined,
-	options?: { showPercent?: boolean },
+	options: ValueDisplayOptions = {},
 ): Row {
-	const outputCells = buildOutputCells(data, componentCosts, {
-		showPercent: options?.showPercent,
-	});
-	const breakdownCells = buildBreakdownCells(data, componentCosts, {
-		showPercent: options?.showPercent,
-	});
+	const outputCells = buildOutputCells(data, componentCosts, options);
+	const breakdownCells = buildBreakdownCells(data, componentCosts, options);
 	const row: Cell[] = [firstCell];
 	if (modelsCell != null) {
 		row.push(modelsCell);
 	}
 	row.push(
-		{ content: formatInputColumn(data, componentCosts), hAlign: 'right' as const },
+		{
+			content: formatInputColumn(data, componentCosts, {
+				hideZeroDetail: options.hideZeroDetail,
+			}),
+			hAlign: 'right' as const,
+		},
 		...outputCells,
 		...breakdownCells,
 		{ content: pc.green(`$${data.totalCost.toFixed(2)}`), hAlign: 'right' as const },
@@ -532,6 +605,7 @@ export function buildAggregateSummaryRow(
 		compact?: boolean;
 		columnCosts?: AggregateColumnCosts;
 		showPercent?: boolean;
+		hideZeroDetail?: boolean;
 	},
 ): Row {
 	const wrap = (s: string): string => {
@@ -560,22 +634,16 @@ export function buildAggregateSummaryRow(
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
 		const totalOutput = data.outputTokens + data.reasoningTokens;
-		const reasoningPct = maybePercent(
-			data.reasoningTokens,
-			totalOutput,
-			options?.showPercent ?? true,
-		);
-		const outputStr =
-			data.reasoningTokens > 0
-				? reasoningPct == null
-					? formatNumber(totalOutput)
-					: `${formatNumber(totalOutput)} ${reasoningPct}`
-				: formatNumber(totalOutput);
-		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost);
+		const outputStr = formatNumber(totalOutput);
+		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost, {
+			hideZeroDetail: options?.hideZeroDetail,
+		});
 		const outputContent =
 			options?.columnCosts == null
 				? outputStr
-				: `${outputStr} ${pc.green(formatCurrencyValue(options.columnCosts.outputCost))}`;
+				: formatAggregateTokenWithCost(totalOutput, options.columnCosts.outputCost, {
+						hideZeroDetail: options.hideZeroDetail,
+					});
 		row.push(
 			{ content: wrap(inputContent), hAlign: 'right' as const },
 			{ content: wrap(outputContent), hAlign: 'right' as const },
@@ -588,7 +656,7 @@ export function buildAggregateSummaryRow(
 		data.outputTokens,
 		data.reasoningTokens,
 		options?.columnCosts?.outputCost,
-		{ showPercent: options?.showPercent },
+		{ showPercent: options?.showPercent, hideZeroDetail: options?.hideZeroDetail },
 	);
 	const breakdownCells = buildAggregateBreakdownCells(
 		data.inputTokens,
@@ -601,7 +669,7 @@ export function buildAggregateSummaryRow(
 					cacheCreateCost: options.columnCosts.cacheCreateCost,
 					cacheReadCost: options.columnCosts.cacheReadCost,
 				},
-		{ showPercent: options?.showPercent },
+		{ showPercent: options?.showPercent, hideZeroDetail: options?.hideZeroDetail },
 	);
 
 	// Wrap cell content with styling
@@ -615,7 +683,11 @@ export function buildAggregateSummaryRow(
 
 	row.push(
 		{
-			content: wrap(formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost)),
+			content: wrap(
+				formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost, {
+					hideZeroDetail: options?.hideZeroDetail,
+				}),
+			),
 			hAlign: 'right' as const,
 		},
 		...wrapCells(outputCells),

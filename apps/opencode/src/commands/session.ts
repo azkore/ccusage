@@ -341,9 +341,39 @@ export const sessionCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Session',
 			hasModelsColumn: true,
+			showPercent: includePercent,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const sessionColumnCostCache = new Map<
+			string,
+			Awaited<ReturnType<typeof calculateAggregateComponentCostsFromEntries>>
+		>();
+		const getSessionColumnCosts = async (sessionID: string) => {
+			if (!includeCost) {
+				return undefined;
+			}
+
+			const cached = sessionColumnCostCache.get(sessionID);
+			if (cached != null) {
+				return cached;
+			}
+
+			const sessionEntries = entriesBySession[sessionID] ?? [];
+			const columnCosts = await calculateAggregateComponentCostsFromEntries(
+				sessionEntries,
+				fetcher,
+			);
+			sessionColumnCostCache.set(sessionID, columnCosts);
+			return columnCosts;
+		};
+
+		const visibleEntriesForTotals = visibleSessionData.flatMap(
+			(session) => entriesBySession[session.sessionID] ?? [],
+		);
+		const totalsColumnCosts = includeCost
+			? await calculateAggregateComponentCostsFromEntries(visibleEntriesForTotals, fetcher)
+			: undefined;
 
 		const aggregateEntries = (entries: LoadedUsageEntry[]) => {
 			let inputTokens = 0;
@@ -469,7 +499,7 @@ export const sessionCommand = define({
 								'',
 								modelMetrics,
 								componentCosts,
-								{ showPercent: includePercent },
+								{ showPercent: includePercent, hideZeroDetail: skipZero },
 							),
 						);
 						continue;
@@ -485,12 +515,13 @@ export const sessionCommand = define({
 							? {
 									compact,
 									showPercent: includePercent,
+									hideZeroDetail: skipZero,
 									columnCosts: await calculateAggregateComponentCostsFromEntries(
 										row.entries,
 										fetcher,
 									),
 								}
-							: { compact, showPercent: includePercent },
+							: { compact, showPercent: includePercent, hideZeroDetail: skipZero },
 					),
 				);
 			}
@@ -521,7 +552,12 @@ export const sessionCommand = define({
 					parentSessionCell,
 					formatModelsDisplayMultiline(parentSession.modelsUsed.map(applyModelAliasForDisplay)),
 					parentSession,
-					{ compact, showPercent: includePercent },
+					{
+						compact,
+						showPercent: includePercent,
+						hideZeroDetail: skipZero,
+						columnCosts: await getSessionColumnCosts(parentSession.sessionID),
+					},
 				),
 			);
 
@@ -543,7 +579,12 @@ export const sessionCommand = define({
 							subSessionCell,
 							formatModelsDisplayMultiline(subSession.modelsUsed.map(applyModelAliasForDisplay)),
 							subSession,
-							{ compact, showPercent: includePercent },
+							{
+								compact,
+								showPercent: includePercent,
+								hideZeroDetail: skipZero,
+								columnCosts: await getSessionColumnCosts(subSession.sessionID),
+							},
 						),
 					);
 
@@ -578,7 +619,23 @@ export const sessionCommand = define({
 							cacheReadTokens: subtotalCacheReadTokens,
 							totalCost: subtotalCost,
 						},
-						{ yellow: true, compact, showPercent: includePercent },
+						{
+							yellow: true,
+							compact,
+							showPercent: includePercent,
+							hideZeroDetail: skipZero,
+							columnCosts: includeCost
+								? await calculateAggregateComponentCostsFromEntries(
+										[
+											...(entriesBySession[parentSession.sessionID] ?? []),
+											...subSessions.flatMap(
+												(subSession) => entriesBySession[subSession.sessionID] ?? [],
+											),
+										],
+										fetcher,
+									)
+								: undefined,
+						},
 					),
 				);
 			}
@@ -589,6 +646,8 @@ export const sessionCommand = define({
 				yellow: true,
 				compact,
 				showPercent: includePercent,
+				hideZeroDetail: skipZero,
+				columnCosts: totalsColumnCosts,
 			}),
 		);
 
