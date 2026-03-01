@@ -397,6 +397,7 @@ export const dailyCommand = define({
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const hideSingleDaySummaryRow = !compact && showBreakdown && visibleDailyData.length === 1;
 		const visibleEntriesForTotals = visibleDailyData.flatMap(
 			(data) => entriesByDate[data.date] ?? [],
 		);
@@ -411,17 +412,19 @@ export const dailyCommand = define({
 				: undefined;
 
 			// Summary Row (no $/M rates — mixed models)
-			table.push(
-				buildAggregateSummaryRow(data.date, 'Daily Total', data, {
-					bold: true,
-					compact,
-					showPercent: includePercent,
-					hideZeroDetail: skipZero,
-					splitValueDetailColumns,
-					splitPercentColumns,
-					columnCosts: summaryColumnCosts,
-				}),
-			);
+			if (!hideSingleDaySummaryRow) {
+				table.push(
+					buildAggregateSummaryRow(data.date, 'Daily Total', data, {
+						bold: true,
+						compact,
+						showPercent: includePercent,
+						hideZeroDetail: skipZero,
+						splitValueDetailColumns,
+						splitPercentColumns,
+						columnCosts: summaryColumnCosts,
+					}),
+				);
+			}
 
 			if (!compact && showBreakdown) {
 				const groupedEntries = groupBy(dayEntries, (entry) => {
@@ -470,7 +473,8 @@ export const dailyCommand = define({
 					.filter((row) => !skipZero || !isDisplayedZeroCost(row.aggregate.totals.totalCost))
 					.sort((a, b) => b.aggregate.totals.totalCost - a.aggregate.totals.totalCost);
 
-				for (const row of breakdownRows) {
+				for (const [rowIndex, row] of breakdownRows.entries()) {
+					const firstCell = hideSingleDaySummaryRow && rowIndex === 0 ? data.date : '';
 					const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
 					if (
 						includeCost &&
@@ -491,7 +495,7 @@ export const dailyCommand = define({
 							);
 
 							table.push(
-								buildModelBreakdownRow('', rowLabel, modelMetrics, componentCosts, {
+								buildModelBreakdownRow(firstCell, rowLabel, modelMetrics, componentCosts, {
 									showPercent: includePercent,
 									hideZeroDetail: skipZero,
 								}),
@@ -502,7 +506,7 @@ export const dailyCommand = define({
 
 					table.push(
 						buildAggregateSummaryRow(
-							'',
+							firstCell,
 							applyModelAliasForDisplay(row.label),
 							row.aggregate.totals,
 							includeCost
