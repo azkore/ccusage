@@ -18,6 +18,7 @@ const subCommands = new Map([
 ]);
 
 const mainCommand = dailyCommand;
+const DEFAULT_BREAKDOWN_VALUE = 'source,provider,cost,percent';
 
 type CommandLike = {
 	args?: Record<string, { type?: string; short?: string }>;
@@ -101,6 +102,34 @@ function assertNoUnknownFlags(command: CommandLike, args: string[]): void {
 	}
 }
 
+function normalizeBareBreakdownFlag(args: string[]): string[] {
+	const normalized: string[] = [];
+
+	for (let index = 0; index < args.length; index += 1) {
+		const token = args[index];
+		if (token == null) {
+			continue;
+		}
+
+		if (token === '--') {
+			normalized.push(token, ...args.slice(index + 1));
+			break;
+		}
+
+		if (token === '--breakdown') {
+			const nextToken = args[index + 1];
+			if (nextToken == null || nextToken.startsWith('-')) {
+				normalized.push(`--breakdown=${DEFAULT_BREAKDOWN_VALUE}`);
+				continue;
+			}
+		}
+
+		normalized.push(token);
+	}
+
+	return normalized;
+}
+
 export async function run(): Promise<void> {
 	// When invoked through npx, the binary name might be passed as the first argument
 	// Filter it out if it matches the expected binary name
@@ -108,6 +137,8 @@ export async function run(): Promise<void> {
 	if (args[0] === 'ccusage-opencode') {
 		args = args.slice(1);
 	}
+
+	args = normalizeBareBreakdownFlag(args);
 
 	const subCommandName = args[0];
 	if (typeof subCommandName === 'string') {
