@@ -29,6 +29,7 @@ type Row = Cell[];
 type ValueDisplayOptions = {
 	showPercent?: boolean;
 	hideZeroDetail?: boolean;
+	showReasoningPercent?: boolean;
 };
 
 export type AggregateColumnCosts = {
@@ -104,6 +105,11 @@ function formatPercent(numerator: number, denominator: number): string {
 	return pc.magenta(`${pct}%`);
 }
 
+function formatPlainPercent(numerator: number, denominator: number): string {
+	const pct = roundedPercent(numerator, denominator);
+	return `${pct}%`;
+}
+
 function maybePercent(
 	numerator: number,
 	denominator: number,
@@ -122,6 +128,26 @@ function maybePercent(
 	}
 
 	return formatPercent(numerator, denominator);
+}
+
+function maybePlainPercent(
+	numerator: number,
+	denominator: number,
+	options: ValueDisplayOptions,
+): string | undefined {
+	if (options.showPercent !== true) {
+		return undefined;
+	}
+
+	if (options.hideZeroDetail === true && (numerator <= 0 || denominator <= 0)) {
+		return undefined;
+	}
+
+	if (options.hideZeroDetail === true && roundedPercent(numerator, denominator) === 0) {
+		return undefined;
+	}
+
+	return formatPlainPercent(numerator, denominator);
 }
 
 /**
@@ -201,12 +227,20 @@ function formatBreakdownCell(
 // Output column cell formatters
 // ---------------------------------------------------------------------------
 
-/**
- * Build the 2 output cells for a per-model row.
- *
- * When reasoning > 0: two cells — total output with cost, reasoning count + pct.
- * When reasoning === 0: one cell with colSpan: 2.
- */
+function appendReasoningPercent(content: string, reasoningPct: string | undefined): string {
+	if (reasoningPct == null || content === '') {
+		return content;
+	}
+
+	if (content.includes('\n')) {
+		const [firstLine, ...rest] = content.split('\n');
+		return [`${firstLine} r=${reasoningPct}`, ...rest].join('\n');
+	}
+
+	return `${content} r=${reasoningPct}`;
+}
+
+/** Build a single output cell for a per-model row. */
 export function buildOutputCells(
 	data: ModelTokenData,
 	componentCosts?: ComponentCosts,
@@ -220,28 +254,23 @@ export function buildOutputCells(
 	if (componentCosts != null && totalOutput > 0) {
 		const { tokenLine, costLine } = formatTierCell(componentCosts.output, undefined, options);
 		outputContent = costLine != null ? `${tokenLine}\n${costLine}` : tokenLine;
+	} else if (options.hideZeroDetail === true && totalOutput <= 0) {
+		outputContent = '';
 	} else {
-		outputContent =
-			options.hideZeroDetail === true && totalOutput <= 0 ? '' : formatNumber(totalOutput);
+		outputContent = formatNumber(totalOutput);
 	}
 
-	if (!showPercent) {
-		return [{ content: outputContent, hAlign: 'right' as const }];
-	}
-
-	const reasoningPct = maybePercent(data.reasoningTokens, totalOutput, {
-		showPercent: true,
+	const reasoningPct = maybePlainPercent(data.reasoningTokens, totalOutput, {
+		showPercent,
 		hideZeroDetail: options.hideZeroDetail,
 	});
+	const contentWithReasoning = appendReasoningPercent(outputContent, reasoningPct);
 
-	return [
-		{ content: reasoningPct ?? '', hAlign: 'right' as const },
-		{ content: outputContent, hAlign: 'right' as const },
-	];
+	return [{ content: contentWithReasoning, hAlign: 'right' as const }];
 }
 
 /**
- * Build the 2 output cells for an aggregate (mixed-model) row.
+ * Build a single output cell for an aggregate (mixed-model) row.
  * No cost rates — just token counts.
  */
 export function buildAggregateOutputCells(
@@ -252,21 +281,18 @@ export function buildAggregateOutputCells(
 ): Cell[] {
 	const totalOutput = outputTokens + reasoningTokens;
 	const showPercent = options.showPercent ?? true;
-	const outputContent = formatAggregateTokenWithCost(totalOutput, outputCost, options);
+	const showReasoningPercent = options.showReasoningPercent ?? true;
+	const reasoningPct =
+		showReasoningPercent === true
+			? maybePlainPercent(reasoningTokens, totalOutput, {
+					showPercent,
+					hideZeroDetail: options.hideZeroDetail,
+				})
+			: undefined;
+	const pctStr = reasoningPct != null ? `r=${reasoningPct}` : undefined;
+	const outputContent = formatAggregateCellWithCost(totalOutput, pctStr, outputCost, options);
 
-	if (!showPercent) {
-		return [{ content: outputContent, hAlign: 'right' as const }];
-	}
-
-	const reasoningPct = maybePercent(reasoningTokens, totalOutput, {
-		showPercent: true,
-		hideZeroDetail: options.hideZeroDetail,
-	});
-
-	return [
-		{ content: reasoningPct ?? '', hAlign: 'right' as const },
-		{ content: outputContent, hAlign: 'right' as const },
-	];
+	return [{ content: outputContent, hAlign: 'right' as const }];
 }
 
 function formatAggregateCellWithCost(
@@ -539,33 +565,24 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 		headerRow1.push({ content: pc.cyan('Models'), rowSpan: 2, vAlign: 'center' });
 	}
 	headerRow1.push({ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
-	if (showPercent) {
-		headerRow1.push({ content: pc.cyan('Output'), colSpan: 2, hAlign: 'center' });
-	} else {
-		headerRow1.push({ content: pc.cyan('Output'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
-	}
+	headerRow1.push({
+		content: pc.cyan(showPercent ? 'Output/Reasoning%' : 'Output'),
+		rowSpan: 2,
+		vAlign: 'center',
+		hAlign: 'right',
+	});
 	headerRow1.push(
 		{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
 		{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
 	);
 	table.push(headerRow1);
 
-	// --- Row 2: sub-headers for Output and Input Breakdown columns ---
-	if (showPercent) {
-		table.push([
-			{ content: pc.cyan('Reason%'), hAlign: 'right' },
-			{ content: pc.cyan('Total'), hAlign: 'right' },
-			{ content: pc.cyan('Base'), hAlign: 'right' },
-			{ content: pc.cyan('Cache Create'), hAlign: 'right' },
-			{ content: pc.cyan('Cache Read'), hAlign: 'right' },
-		]);
-	} else {
-		table.push([
-			{ content: pc.cyan('Base'), hAlign: 'right' },
-			{ content: pc.cyan('Cache Create'), hAlign: 'right' },
-			{ content: pc.cyan('Cache Read'), hAlign: 'right' },
-		]);
-	}
+	// --- Row 2: sub-headers for Input Breakdown columns ---
+	table.push([
+		{ content: pc.cyan('Base'), hAlign: 'right' },
+		{ content: pc.cyan('Cache Create'), hAlign: 'right' },
+		{ content: pc.cyan('Cache Read'), hAlign: 'right' },
+	]);
 
 	return table;
 }
@@ -635,6 +652,7 @@ export function buildAggregateSummaryRow(
 		columnCosts?: AggregateColumnCosts;
 		showPercent?: boolean;
 		hideZeroDetail?: boolean;
+		showReasoningPercent?: boolean;
 	},
 ): Row {
 	const wrap = (s: string): string => {
@@ -649,6 +667,9 @@ export function buildAggregateSummaryRow(
 	};
 
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
+	const totalOutput = data.outputTokens + data.reasoningTokens;
+	const isTotalsRow = firstCell === 'Total' || modelsCell?.endsWith(' Total') === true;
+	const showReasoningPercent = options?.showReasoningPercent ?? !isTotalsRow;
 
 	const costStr =
 		options?.yellow === true
@@ -662,18 +683,23 @@ export function buildAggregateSummaryRow(
 
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
-		const totalOutput = data.outputTokens + data.reasoningTokens;
-		const outputStr =
-			options.hideZeroDetail === true && totalOutput <= 0 ? '' : formatNumber(totalOutput);
 		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost, {
 			hideZeroDetail: options?.hideZeroDetail,
 		});
-		const outputContent =
-			options?.columnCosts == null
-				? outputStr
-				: formatAggregateTokenWithCost(totalOutput, options.columnCosts.outputCost, {
-						hideZeroDetail: options.hideZeroDetail,
-					});
+		const reasoningPct =
+			showReasoningPercent === true
+				? maybePlainPercent(data.reasoningTokens, totalOutput, {
+						showPercent: options?.showPercent,
+						hideZeroDetail: options?.hideZeroDetail,
+					})
+				: undefined;
+		const pctStr = reasoningPct != null ? `r=${reasoningPct}` : undefined;
+		const outputContent = formatAggregateCellWithCost(
+			totalOutput,
+			pctStr,
+			options?.columnCosts?.outputCost,
+			{ hideZeroDetail: options?.hideZeroDetail },
+		);
 		row.push(
 			{ content: wrap(inputContent), hAlign: 'right' as const },
 			{ content: wrap(outputContent), hAlign: 'right' as const },
@@ -686,7 +712,11 @@ export function buildAggregateSummaryRow(
 		data.outputTokens,
 		data.reasoningTokens,
 		options?.columnCosts?.outputCost,
-		{ showPercent: options?.showPercent, hideZeroDetail: options?.hideZeroDetail },
+		{
+			showPercent: options?.showPercent,
+			hideZeroDetail: options?.hideZeroDetail,
+			showReasoningPercent,
+		},
 	);
 	const breakdownCells = buildAggregateBreakdownCells(
 		data.inputTokens,
