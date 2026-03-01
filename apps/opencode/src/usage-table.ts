@@ -26,6 +26,12 @@ import { formatInputColumn, totalInputTokens } from './cost-utils.ts';
 type Cell = string | CellOptions;
 type Row = Cell[];
 
+type ColumnMeta = {
+	align: 'left' | 'right';
+	minWidth: number;
+	preferredWidth: number;
+};
+
 type ValueDisplayOptions = {
 	showPercent?: boolean;
 	hideZeroDetail?: boolean;
@@ -58,6 +64,237 @@ export type UsageTableConfig = {
 	/** Force compact mode (hide breakdown columns) */
 	forceCompact?: boolean;
 };
+
+function buildFullColumnMeta(config: UsageTableConfig): ColumnMeta[] {
+	const hasModels = config.hasModelsColumn ?? true;
+	const splitValueDetailColumns = config.splitValueDetailColumns ?? false;
+	const showPercent = config.showPercent ?? false;
+	const splitPercentColumns = {
+		output: config.splitPercentColumns?.output ?? showPercent,
+		cacheCreate: config.splitPercentColumns?.cacheCreate ?? showPercent,
+		cacheRead: config.splitPercentColumns?.cacheRead ?? showPercent,
+	};
+
+	const cols: ColumnMeta[] = [
+		{ align: 'left', minWidth: 10, preferredWidth: 18 }, // Date/Week/Month/Session/Model
+	];
+	if (hasModels) {
+		cols.push({ align: 'left', minWidth: 12, preferredWidth: 24 }); // Models
+	}
+
+	if (!splitValueDetailColumns) {
+		cols.push(
+			{ align: 'right', minWidth: 7, preferredWidth: 11 }, // Input
+			{ align: 'right', minWidth: 7, preferredWidth: 10 }, // Output
+			{ align: 'right', minWidth: 6, preferredWidth: 8 }, // Base
+			{ align: 'right', minWidth: 7, preferredWidth: 12 }, // Cache Create
+			{ align: 'right', minWidth: 7, preferredWidth: 12 }, // Cache Read
+			{ align: 'right', minWidth: 7, preferredWidth: 10 }, // Cost
+		);
+		return cols;
+	}
+
+	// Split mode: value/percent/cost subcolumns
+	cols.push(
+		{ align: 'right', minWidth: 7, preferredWidth: 11 }, // Input value
+		{ align: 'right', minWidth: 7, preferredWidth: 9 }, // Input cost
+		{ align: 'right', minWidth: 7, preferredWidth: 10 }, // Output value
+	);
+	if (splitPercentColumns.output) {
+		cols.push({ align: 'right', minWidth: 4, preferredWidth: 7 }); // Output reasoning %
+	}
+	cols.push({ align: 'right', minWidth: 7, preferredWidth: 9 }); // Output cost
+
+	cols.push(
+		{ align: 'right', minWidth: 6, preferredWidth: 8 }, // Base value
+		{ align: 'right', minWidth: 6, preferredWidth: 8 }, // Base cost
+		{ align: 'right', minWidth: 7, preferredWidth: 10 }, // Cache Create value
+	);
+	if (splitPercentColumns.cacheCreate) {
+		cols.push({ align: 'right', minWidth: 3, preferredWidth: 6 }); // Cache Create %
+	}
+	cols.push({ align: 'right', minWidth: 7, preferredWidth: 8 }); // Cache Create cost
+
+	cols.push({ align: 'right', minWidth: 7, preferredWidth: 10 }); // Cache Read value
+	if (splitPercentColumns.cacheRead) {
+		cols.push({ align: 'right', minWidth: 3, preferredWidth: 6 }); // Cache Read %
+	}
+	cols.push(
+		{ align: 'right', minWidth: 7, preferredWidth: 8 }, // Cache Read cost
+		{ align: 'right', minWidth: 7, preferredWidth: 10 }, // Total cost
+	);
+
+	return cols;
+}
+
+function shrinkColWidthsToFit(
+	baseWidths: number[],
+	minWidths: number[],
+	priorityIndices: number[],
+	terminalWidth: number,
+): number[] {
+	const tableOverhead = baseWidths.length + 1; // vertical borders + separators
+	const availableWidth = Math.max(0, terminalWidth - tableOverhead);
+	const widths = [...baseWidths];
+	const baseTotal = widths.reduce((sum, width) => sum + width, 0);
+
+	if (baseTotal <= availableWidth) {
+		return widths;
+	}
+
+	let deficit = baseTotal - availableWidth;
+	const priority = [
+		...new Set(priorityIndices.filter((index) => index >= 0 && index < widths.length)),
+	];
+	const fallback = widths.map((_, index) => index).filter((index) => !priority.includes(index));
+	const orderedIndices = [...priority, ...fallback];
+
+	while (deficit > 0) {
+		let reduced = false;
+		for (const index of orderedIndices) {
+			if (deficit <= 0) {
+				break;
+			}
+			const minWidth = minWidths[index] ?? 0;
+			const currentWidth = widths[index] ?? 0;
+			if (currentWidth <= minWidth) {
+				continue;
+			}
+
+			widths[index] = currentWidth - 1;
+			deficit -= 1;
+			reduced = true;
+		}
+
+		if (!reduced) {
+			break;
+		}
+	}
+
+	return widths;
+}
+
+function buildShrinkPriorityIndices(config: UsageTableConfig): number[] {
+	const hasModels = config.hasModelsColumn ?? true;
+	const splitValueDetailColumns = config.splitValueDetailColumns ?? false;
+	const showPercent = config.showPercent ?? false;
+	const splitPercentColumns = {
+		output: config.splitPercentColumns?.output ?? showPercent,
+		cacheCreate: config.splitPercentColumns?.cacheCreate ?? showPercent,
+		cacheRead: config.splitPercentColumns?.cacheRead ?? showPercent,
+	};
+
+	let index = 1; // first column is index 0
+	const priorityIndices: number[] = [];
+
+	if (hasModels) {
+		priorityIndices.push(index);
+		index += 1;
+	}
+
+	if (!splitValueDetailColumns) {
+		// Input, Output, Base, Cache Create, Cache Read, Cost
+		priorityIndices.push(index + 2, index + 3, index + 4);
+		return priorityIndices;
+	}
+
+	index += 2; // Input value + cost
+	index += 1; // Output value
+	if (splitPercentColumns.output) {
+		priorityIndices.push(index);
+		index += 1;
+	}
+	index += 1; // Output cost
+
+	index += 2; // Base value + cost
+
+	index += 1; // Cache Create value
+	if (splitPercentColumns.cacheCreate) {
+		priorityIndices.push(index);
+		index += 1;
+	}
+	priorityIndices.push(index); // Cache Create cost
+	index += 1;
+
+	index += 1; // Cache Read value
+	if (splitPercentColumns.cacheRead) {
+		priorityIndices.push(index);
+		index += 1;
+	}
+	priorityIndices.push(index); // Cache Read cost
+
+	return priorityIndices;
+}
+
+function stripAnsiCodes(text: string): string {
+	const ansiRegex = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+	return text.replace(ansiRegex, '');
+}
+
+function getRenderedMaxLineWidth(text: string): number {
+	return text
+		.split('\n')
+		.reduce((maxWidth, line) => Math.max(maxWidth, stripAnsiCodes(line).length), 0);
+}
+
+function getCellContentAndSpan(cell: Cell): { content: string; colSpan: number } {
+	if (typeof cell === 'object' && cell != null && 'content' in cell) {
+		const content = String(cell.content ?? '');
+		const colSpan = typeof cell.colSpan === 'number' && cell.colSpan > 1 ? cell.colSpan : 1;
+		return { content, colSpan };
+	}
+
+	return { content: String(cell ?? ''), colSpan: 1 };
+}
+
+function computeNaturalColWidths(table: Table.Table, columnMeta: ColumnMeta[]): number[] {
+	const widths = columnMeta.map((col) => Math.max(1, col.minWidth));
+	const columnCount = widths.length;
+
+	for (const rawRow of table as unknown as Cell[][]) {
+		if (!Array.isArray(rawRow)) {
+			continue;
+		}
+
+		let columnIndex = 0;
+		for (const rawCell of rawRow) {
+			if (columnIndex >= columnCount) {
+				break;
+			}
+
+			const { content, colSpan } = getCellContentAndSpan(rawCell);
+			const span = Math.max(1, Math.min(colSpan, columnCount - columnIndex));
+			const textWidth = getRenderedMaxLineWidth(content) + 2;
+
+			if (span === 1) {
+				widths[columnIndex] = Math.max(widths[columnIndex] ?? 1, textWidth);
+				columnIndex += 1;
+				continue;
+			}
+
+			const currentSpanWidth = widths
+				.slice(columnIndex, columnIndex + span)
+				.reduce((sum, width) => sum + width, 0);
+			if (textWidth > currentSpanWidth) {
+				let extra = textWidth - currentSpanWidth;
+				for (let index = 0; index < span && extra > 0; index += 1) {
+					const targetIndex = columnIndex + index;
+					if (targetIndex >= columnCount) {
+						break;
+					}
+					const slotsRemaining = span - index;
+					const add = Math.ceil(extra / slotsRemaining);
+					widths[targetIndex] = (widths[targetIndex] ?? 1) + add;
+					extra -= add;
+				}
+			}
+
+			columnIndex += span;
+		}
+	}
+
+	return widths;
+}
 
 function tierTotalTokens(t: TierBreakdown): number {
 	return t.baseTierTokens + t.aboveTierTokens;
@@ -611,10 +848,49 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 	}
 
 	// Full mode: no predefined head — we push the header rows manually
+	const fullColumnMeta = buildFullColumnMeta(config);
+	const shrinkPriorityIndices = buildShrinkPriorityIndices(config);
 	const opts: TableConstructorOptions = {
 		style: { head: ['cyan'] },
+		colAligns: fullColumnMeta.map((col) => col.align),
 	};
 	const table = new Table(opts);
+	const mutableTable = table as Table.Table & {
+		options: TableConstructorOptions;
+		toString: () => string;
+	};
+	const renderWithWidths = (colWidths: number[], wordWrap: boolean): string => {
+		const renderTable = new Table({
+			style: { head: ['cyan'] },
+			colAligns: fullColumnMeta.map((col) => col.align),
+			colWidths,
+			wordWrap,
+			wrapOnWordBoundary: wordWrap,
+		});
+		for (const row of mutableTable as unknown as Cell[][]) {
+			renderTable.push(row);
+		}
+		return renderTable.toString();
+	};
+	mutableTable.toString = () => {
+		const currentTerminalWidth =
+			Number.parseInt(process.env.COLUMNS ?? '', 10) || process.stdout.columns || 120;
+		const minWidths = fullColumnMeta.map((col) => col.minWidth);
+		const naturalColWidths = computeNaturalColWidths(mutableTable, fullColumnMeta);
+
+		const naturalRender = renderWithWidths(naturalColWidths, true);
+		if (getRenderedMaxLineWidth(naturalRender) <= currentTerminalWidth) {
+			return naturalRender;
+		}
+
+		const shrunkWidths = shrinkColWidthsToFit(
+			naturalColWidths,
+			minWidths,
+			shrinkPriorityIndices,
+			currentTerminalWidth,
+		);
+		return renderWithWidths(shrunkWidths, false);
+	};
 
 	// --- Row 1: top header with Input Breakdown colspan ---
 	const headerRow1: Cell[] = [
