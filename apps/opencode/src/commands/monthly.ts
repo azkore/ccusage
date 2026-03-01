@@ -1,6 +1,7 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
+import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import {
@@ -397,6 +398,7 @@ export const monthlyCommand = define({
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const showExpandedBreakdown = !compact && showBreakdown;
 		const visibleEntriesForTotals = visibleMonthlyData.flatMap(
 			(data) => entriesByMonth[data.month] ?? [],
 		);
@@ -409,9 +411,12 @@ export const monthlyCommand = define({
 			const summaryColumnCosts = includeCost
 				? await calculateAggregateComponentCostsFromEntries(monthEntries, fetcher)
 				: undefined;
+			const summaryModelsCell = showExpandedBreakdown
+				? 'Monthly Total'
+				: formatModelsDisplayMultiline(data.modelsUsed);
 
 			table.push(
-				buildAggregateSummaryRow(data.month, 'Monthly Total', data, {
+				buildAggregateSummaryRow(data.month, summaryModelsCell, data, {
 					bold: true,
 					compact,
 					showPercent: includePercent,
@@ -422,7 +427,7 @@ export const monthlyCommand = define({
 				}),
 			);
 
-			if (!compact && showBreakdown) {
+			if (showExpandedBreakdown) {
 				const groupedEntries = groupBy(monthEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);

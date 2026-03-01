@@ -1,6 +1,7 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
+import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import {
@@ -425,6 +426,7 @@ export const weeklyCommand = define({
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const showExpandedBreakdown = !compact && showBreakdown;
 		const visibleEntriesForTotals = visibleWeeklyData.flatMap(
 			(data) => entriesByWeek[data.week] ?? [],
 		);
@@ -437,9 +439,12 @@ export const weeklyCommand = define({
 			const summaryColumnCosts = includeCost
 				? await calculateAggregateComponentCostsFromEntries(weekEntries, fetcher)
 				: undefined;
+			const summaryModelsCell = showExpandedBreakdown
+				? 'Weekly Total'
+				: formatModelsDisplayMultiline(data.modelsUsed);
 
 			table.push(
-				buildAggregateSummaryRow(data.week, 'Weekly Total', data, {
+				buildAggregateSummaryRow(data.week, summaryModelsCell, data, {
 					bold: true,
 					compact,
 					showPercent: includePercent,
@@ -450,7 +455,7 @@ export const weeklyCommand = define({
 				}),
 			);
 
-			if (!compact && showBreakdown) {
+			if (showExpandedBreakdown) {
 				const groupedEntries = groupBy(weekEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);

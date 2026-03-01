@@ -1,6 +1,7 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
+import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import {
@@ -397,6 +398,7 @@ export const dailyCommand = define({
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
+		const showExpandedBreakdown = !compact && showBreakdown;
 		const hideSingleDaySummaryRow = !compact && showBreakdown && visibleDailyData.length === 1;
 		const visibleEntriesForTotals = visibleDailyData.flatMap(
 			(data) => entriesByDate[data.date] ?? [],
@@ -410,11 +412,14 @@ export const dailyCommand = define({
 			const summaryColumnCosts = includeCost
 				? await calculateAggregateComponentCostsFromEntries(dayEntries, fetcher)
 				: undefined;
+			const summaryModelsCell = showExpandedBreakdown
+				? 'Daily Total'
+				: formatModelsDisplayMultiline(data.modelsUsed);
 
 			// Summary Row (no $/M rates — mixed models)
 			if (!hideSingleDaySummaryRow) {
 				table.push(
-					buildAggregateSummaryRow(data.date, 'Daily Total', data, {
+					buildAggregateSummaryRow(data.date, summaryModelsCell, data, {
 						bold: true,
 						compact,
 						showPercent: includePercent,
@@ -426,7 +431,7 @@ export const dailyCommand = define({
 				);
 			}
 
-			if (!compact && showBreakdown) {
+			if (showExpandedBreakdown) {
 				const groupedEntries = groupBy(dayEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);
