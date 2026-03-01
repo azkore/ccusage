@@ -380,7 +380,13 @@ export const dailyCommand = define({
 
 		for (const data of visibleDailyData) {
 			// Summary Row (no $/M rates — mixed models)
-			table.push(buildAggregateSummaryRow(data.date, 'Daily Total', data, { bold: true, compact }));
+			table.push(
+				buildAggregateSummaryRow(data.date, 'Daily Total', data, {
+					bold: true,
+					compact,
+					showPercent: includePercent,
+				}),
+			);
 
 			if (!compact && showBreakdown) {
 				const dayEntries = entriesByDate[data.date] ?? [];
@@ -480,7 +486,13 @@ export const dailyCommand = define({
 			}
 		}
 
-		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
+		table.push(
+			buildAggregateSummaryRow('Total', '', totals, {
+				yellow: true,
+				compact,
+				showPercent: includePercent,
+			}),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

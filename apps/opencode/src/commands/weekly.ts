@@ -401,7 +401,11 @@ export const weeklyCommand = define({
 
 		for (const data of visibleWeeklyData) {
 			table.push(
-				buildAggregateSummaryRow(data.week, 'Weekly Total', data, { bold: true, compact }),
+				buildAggregateSummaryRow(data.week, 'Weekly Total', data, {
+					bold: true,
+					compact,
+					showPercent: includePercent,
+				}),
 			);
 
 			if (!compact && showBreakdown) {
@@ -502,7 +506,13 @@ export const weeklyCommand = define({
 			}
 		}
 
-		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
+		table.push(
+			buildAggregateSummaryRow('Total', '', totals, {
+				yellow: true,
+				compact,
+				showPercent: includePercent,
+			}),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

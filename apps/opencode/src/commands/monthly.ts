@@ -382,7 +382,11 @@ export const monthlyCommand = define({
 
 		for (const data of visibleMonthlyData) {
 			table.push(
-				buildAggregateSummaryRow(data.month, 'Monthly Total', data, { bold: true, compact }),
+				buildAggregateSummaryRow(data.month, 'Monthly Total', data, {
+					bold: true,
+					compact,
+					showPercent: includePercent,
+				}),
 			);
 
 			if (!compact && showBreakdown) {
@@ -483,7 +487,13 @@ export const monthlyCommand = define({
 			}
 		}
 
-		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
+		table.push(
+			buildAggregateSummaryRow('Total', '', totals, {
+				yellow: true,
+				compact,
+				showPercent: includePercent,
+			}),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

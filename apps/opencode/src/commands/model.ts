@@ -527,12 +527,19 @@ export const modelCommand = define({
 						null,
 						data,
 						data.componentCosts,
+						{ showPercent: includePercent },
 					),
 				);
 			}
 		}
 
-		table.push(buildAggregateSummaryRow('Total', null, totals, { yellow: true, compact }));
+		table.push(
+			buildAggregateSummaryRow('Total', null, totals, {
+				yellow: true,
+				compact,
+				showPercent: includePercent,
+			}),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());

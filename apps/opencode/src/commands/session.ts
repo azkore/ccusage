@@ -521,7 +521,7 @@ export const sessionCommand = define({
 					parentSessionCell,
 					formatModelsDisplayMultiline(parentSession.modelsUsed.map(applyModelAliasForDisplay)),
 					parentSession,
-					{ compact },
+					{ compact, showPercent: includePercent },
 				),
 			);
 
@@ -543,7 +543,7 @@ export const sessionCommand = define({
 							subSessionCell,
 							formatModelsDisplayMultiline(subSession.modelsUsed.map(applyModelAliasForDisplay)),
 							subSession,
-							{ compact },
+							{ compact, showPercent: includePercent },
 						),
 					);
 
@@ -578,13 +578,19 @@ export const sessionCommand = define({
 							cacheReadTokens: subtotalCacheReadTokens,
 							totalCost: subtotalCost,
 						},
-						{ yellow: true, compact },
+						{ yellow: true, compact, showPercent: includePercent },
 					),
 				);
 			}
 		}
 
-		table.push(buildAggregateSummaryRow('Total', '', totals, { yellow: true, compact }));
+		table.push(
+			buildAggregateSummaryRow('Total', '', totals, {
+				yellow: true,
+				compact,
+				showPercent: includePercent,
+			}),
+		);
 
 		// eslint-disable-next-line no-console
 		console.log(table.toString());
