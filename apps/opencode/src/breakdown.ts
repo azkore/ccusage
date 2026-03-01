@@ -1,6 +1,12 @@
 import { resolveModelAlias } from './model-alias.ts';
 
-export type BreakdownDimension = 'source' | 'provider' | 'model' | 'project' | 'session';
+export type BreakdownDimension =
+	| 'source'
+	| 'provider'
+	| 'model'
+	| 'full-model'
+	| 'project'
+	| 'session';
 
 export function resolveBreakdownDimensions(args: {
 	full: boolean;

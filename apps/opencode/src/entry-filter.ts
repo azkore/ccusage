@@ -103,13 +103,19 @@ export function matchesProviderFilter(entry: LoadedUsageEntry, providerFilter: s
 	return entry.provider.toLowerCase().includes(providerFilter.toLowerCase());
 }
 
+export function createFullModelLabel(
+	entry: Pick<LoadedUsageEntry, 'source' | 'provider' | 'model'>,
+): string {
+	const normalizedModel = normalizeModelName(entry.model, entry.provider);
+	return `${entry.source}/${entry.provider}/${normalizedModel}`;
+}
+
 export function matchesFullModelFilter(entry: LoadedUsageEntry, fullModelFilter: string): boolean {
 	if (fullModelFilter === '') {
 		return true;
 	}
 
-	const normalizedModel = normalizeModelName(entry.model, entry.provider);
-	const fullModel = `${entry.source}/${entry.provider}/${normalizedModel}`.toLowerCase();
+	const fullModel = createFullModelLabel(entry).toLowerCase();
 
 	return fullModel.includes(fullModelFilter.toLowerCase());
 }

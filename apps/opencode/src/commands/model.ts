@@ -17,6 +17,7 @@ import {
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
+	createFullModelLabel,
 	extractProjectName,
 	filterEntriesBySessionProjectFilters,
 	parseFilterInputs,
@@ -113,7 +114,8 @@ export const modelCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,provider,project,session) or none',
+			description:
+				'Comma-separated breakdowns (source,provider,full-model,project,session) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -138,11 +140,12 @@ export const modelCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['source', 'provider', 'project', 'session'],
+			available: ['source', 'provider', 'full-model', 'project', 'session'],
 		});
 		const showBreakdown = breakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
+		const includeFullModel = breakdowns.includes('full-model');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
 		const showProjectBreakdown = includeProject || includeSession;
@@ -448,14 +451,16 @@ export const modelCommand = define({
 					metadata?.directory ?? 'unknown',
 					metadata?.projectID ?? '',
 				);
-				const modelKey = includeProvider
-					? plainModelLabelForEntry(entry)
-					: modelLabelForEntry(entry);
+				const modelKey = includeFullModel
+					? createFullModelLabel(entry)
+					: includeProvider
+						? plainModelLabelForEntry(entry)
+						: modelLabelForEntry(entry);
 
-				if (includeSource) {
+				if (includeSource && !includeFullModel) {
 					keyParts.push(entry.source);
 				}
-				if (includeProvider) {
+				if (includeProvider && !includeFullModel) {
 					keyParts.push(entry.provider);
 				}
 				if (includeProject) {

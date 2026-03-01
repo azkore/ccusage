@@ -13,6 +13,7 @@ import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../co
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
+	createFullModelLabel,
 	extractProjectName,
 	filterEntriesBySessionProjectFilters,
 	parseFilterInputs,
@@ -126,7 +127,8 @@ export const weeklyCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,provider,model,project,session) or none',
+			description:
+				'Comma-separated breakdowns (source,provider,model,full-model,project,session) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -148,13 +150,9 @@ export const weeklyCommand = define({
 		const source = parseUsageSource(sourceInput);
 		const breakdownInput =
 			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
-		const availableBreakdowns: Array<'source' | 'provider' | 'model' | 'project' | 'session'> = [
-			'source',
-			'provider',
-			'model',
-			'project',
-			'session',
-		];
+		const availableBreakdowns: Array<
+			'source' | 'provider' | 'model' | 'full-model' | 'project' | 'session'
+		> = ['source', 'provider', 'model', 'full-model', 'project', 'session'];
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
@@ -164,6 +162,7 @@ export const weeklyCommand = define({
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
+		const includeFullModel = breakdowns.includes('full-model');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -406,17 +405,21 @@ export const weeklyCommand = define({
 					const modelKey = includeProvider
 						? plainModelLabelForEntry(entry)
 						: modelLabelForEntry(entry);
-					if (includeSource) {
-						keyParts.push(entry.source);
-					}
-					if (includeProvider && includeModel) {
-						keyParts.push(`${entry.provider}/${modelKey}`);
+					if (includeFullModel) {
+						keyParts.push(createFullModelLabel(entry));
 					} else {
-						if (includeProvider) {
-							keyParts.push(entry.provider);
+						if (includeSource) {
+							keyParts.push(entry.source);
 						}
-						if (includeModel) {
-							keyParts.push(modelKey);
+						if (includeProvider && includeModel) {
+							keyParts.push(`${entry.provider}/${modelKey}`);
+						} else {
+							if (includeProvider) {
+								keyParts.push(entry.provider);
+							}
+							if (includeModel) {
+								keyParts.push(modelKey);
+							}
 						}
 					}
 					if (includeProject) {
@@ -440,7 +443,7 @@ export const weeklyCommand = define({
 
 				for (const row of breakdownRows) {
 					const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
-					if (includeModel && modelMetricsValues.length === 1) {
+					if ((includeModel || includeFullModel) && modelMetricsValues.length === 1) {
 						const modelMetrics = modelMetricsValues[0];
 						if (modelMetrics != null) {
 							const pricingModel = row.entries[0]?.model ?? row.label;

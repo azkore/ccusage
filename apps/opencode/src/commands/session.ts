@@ -14,6 +14,7 @@ import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../co
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
+	createFullModelLabel,
 	extractProjectName,
 	filterEntriesBySessionProjectFilters,
 	parseFilterInputs,
@@ -110,7 +111,7 @@ export const sessionCommand = define({
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,provider,model,project) or none',
+			description: 'Comma-separated breakdowns (source,provider,model,full-model,project) or none',
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -140,12 +141,13 @@ export const sessionCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['source', 'provider', 'model', 'project'],
+			available: ['source', 'provider', 'model', 'full-model', 'project'],
 		});
 		const showBreakdown = breakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
+		const includeFullModel = breakdowns.includes('full-model');
 		const includeProject = breakdowns.includes('project');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
@@ -399,17 +401,21 @@ export const sessionCommand = define({
 					? plainModelLabelForEntry(entry)
 					: modelLabelForEntry(entry);
 
-				if (includeSource) {
-					keyParts.push(entry.source);
-				}
-				if (includeProvider && includeModel) {
-					keyParts.push(`${entry.provider}/${modelKey}`);
+				if (includeFullModel) {
+					keyParts.push(createFullModelLabel(entry));
 				} else {
-					if (includeProvider) {
-						keyParts.push(entry.provider);
+					if (includeSource) {
+						keyParts.push(entry.source);
 					}
-					if (includeModel) {
-						keyParts.push(modelKey);
+					if (includeProvider && includeModel) {
+						keyParts.push(`${entry.provider}/${modelKey}`);
+					} else {
+						if (includeProvider) {
+							keyParts.push(entry.provider);
+						}
+						if (includeModel) {
+							keyParts.push(modelKey);
+						}
 					}
 				}
 				if (includeProject) {
@@ -430,7 +436,11 @@ export const sessionCommand = define({
 
 			for (const row of rows) {
 				const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
-				if (includeModel && breakdowns.length === 1 && modelMetricsValues.length === 1) {
+				if (
+					(includeModel || includeFullModel) &&
+					breakdowns.length === 1 &&
+					modelMetricsValues.length === 1
+				) {
 					const modelMetrics = modelMetricsValues[0];
 					if (modelMetrics != null) {
 						const pricingModel = row.entries[0]?.model ?? row.label;
