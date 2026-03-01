@@ -39,7 +39,8 @@ import {
 
 export const dailyCommand = define({
 	name: 'daily',
-	description: 'Show OpenCode token usage grouped by day',
+	description:
+		'Show OpenCode token usage grouped by day. Use --breakdown model for per-model rate details ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -102,12 +103,13 @@ export const dailyCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show all available breakdown rows',
+			description:
+				'Enable all breakdown dimensions for this report (shortcut for --breakdown <all supported>)',
 		},
 		breakdown: {
 			type: 'string',
 			description:
-				'Comma-separated breakdowns (source,provider,model,full-model,project,session) or none',
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',

@@ -44,7 +44,8 @@ function truncateSessionTitle(title: string): string {
 
 export const sessionCommand = define({
 	name: 'session',
-	description: 'Show OpenCode token usage grouped by session',
+	description:
+		'Show OpenCode token usage grouped by session. Use --breakdown model for per-model rate details ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -107,11 +108,13 @@ export const sessionCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show all available breakdown rows',
+			description:
+				'Enable all breakdown dimensions for this report (shortcut for --breakdown <all supported>)',
 		},
 		breakdown: {
 			type: 'string',
-			description: 'Comma-separated breakdowns (source,provider,model,full-model,project) or none',
+			description:
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, project. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',

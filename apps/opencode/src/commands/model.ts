@@ -47,7 +47,8 @@ type ProjectBreakdown = ModelTokenData & {
 
 export const modelCommand = define({
 	name: 'model',
-	description: 'Show OpenCode token usage grouped by model',
+	description:
+		'Show OpenCode token usage grouped by model. Per-model rate details ($/M→$...) are shown by default; use --breakdown for extra grouping.',
 	args: {
 		id: {
 			type: 'string',
@@ -110,12 +111,13 @@ export const modelCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show all available breakdown rows',
+			description:
+				'Enable all breakdown dimensions for this report (shortcut for --breakdown <all supported>)',
 		},
 		breakdown: {
 			type: 'string',
 			description:
-				'Comma-separated breakdowns (source,provider,full-model,project,session) or none',
+				"Choose breakdown dimensions (comma-separated): source, provider, full-model, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',

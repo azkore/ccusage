@@ -60,7 +60,8 @@ function getISOWeek(date: Date): string {
 
 export const weeklyCommand = define({
 	name: 'weekly',
-	description: 'Show OpenCode token usage grouped by week (ISO week format)',
+	description:
+		'Show OpenCode token usage grouped by week (ISO week format). Use --breakdown model for per-model rate details ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -123,12 +124,13 @@ export const weeklyCommand = define({
 		},
 		full: {
 			type: 'boolean',
-			description: 'Show all available breakdown rows',
+			description:
+				'Enable all breakdown dimensions for this report (shortcut for --breakdown <all supported>)',
 		},
 		breakdown: {
 			type: 'string',
 			description:
-				'Comma-separated breakdowns (source,provider,model,full-model,project,session) or none',
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
