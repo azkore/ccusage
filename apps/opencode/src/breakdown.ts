@@ -5,6 +5,7 @@ export type BreakdownDimension =
 	| 'provider'
 	| 'model'
 	| 'full-model'
+	| 'cost'
 	| 'project'
 	| 'session';
 

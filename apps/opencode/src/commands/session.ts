@@ -10,7 +10,11 @@ import {
 	isDisplayedZeroCost,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
-import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
+import {
+	calculateAggregateComponentCostsFromEntries,
+	calculateComponentCostsFromEntries,
+	calculateCostForEntry,
+} from '../cost-utils.ts';
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
@@ -45,7 +49,7 @@ function truncateSessionTitle(title: string): string {
 export const sessionCommand = define({
 	name: 'session',
 	description:
-		'Show OpenCode token usage grouped by session. Use --breakdown model for per-model rate details ($/M→$...).',
+		'Show OpenCode token usage grouped by session. Use --breakdown model,cost for per-model rate details ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -114,7 +118,7 @@ export const sessionCommand = define({
 		breakdown: {
 			type: 'string',
 			description:
-				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, project. Use 'none' to disable.",
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, project. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -144,13 +148,15 @@ export const sessionCommand = define({
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
-			available: ['source', 'provider', 'model', 'full-model', 'project'],
+			available: ['source', 'provider', 'model', 'full-model', 'cost', 'project'],
 		});
-		const showBreakdown = breakdowns.length > 0;
+		const groupingBreakdowns = breakdowns.filter((dimension) => dimension !== 'cost');
+		const showBreakdown = groupingBreakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
 		const includeFullModel = breakdowns.includes('full-model');
+		const includeCost = breakdowns.includes('cost');
 		const includeProject = breakdowns.includes('project');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
@@ -440,8 +446,9 @@ export const sessionCommand = define({
 			for (const row of rows) {
 				const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
 				if (
+					includeCost &&
 					(includeModel || includeFullModel) &&
-					breakdowns.length === 1 &&
+					groupingBreakdowns.length === 1 &&
 					modelMetricsValues.length === 1
 				) {
 					const modelMetrics = modelMetricsValues[0];
@@ -466,7 +473,20 @@ export const sessionCommand = define({
 				}
 
 				table.push(
-					buildAggregateSummaryRow(`${prefix}${row.label}`, '', row.aggregate, { compact }),
+					buildAggregateSummaryRow(
+						`${prefix}${row.label}`,
+						'',
+						row.aggregate,
+						includeCost
+							? {
+									compact,
+									columnCosts: await calculateAggregateComponentCostsFromEntries(
+										row.entries,
+										fetcher,
+									),
+								}
+							: { compact },
+					),
 				);
 			}
 		};

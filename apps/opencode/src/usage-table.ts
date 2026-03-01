@@ -26,6 +26,14 @@ import { formatInputColumn, totalInputTokens } from './cost-utils.ts';
 type Cell = string | CellOptions;
 type Row = Cell[];
 
+export type AggregateColumnCosts = {
+	inputCost: number;
+	outputCost: number;
+	baseInputCost: number;
+	cacheCreateCost: number;
+	cacheReadCost: number;
+};
+
 export type UsageTableConfig = {
 	/** Label for the first column: "Date", "Week", "Month", "Session", "Model" */
 	firstColumnName: string;
@@ -172,20 +180,47 @@ export function buildOutputCells(data: ModelTokenData, componentCosts?: Componen
  * Build the 2 output cells for an aggregate (mixed-model) row.
  * No cost rates — just token counts.
  */
-export function buildAggregateOutputCells(outputTokens: number, reasoningTokens: number): Cell[] {
+export function buildAggregateOutputCells(
+	outputTokens: number,
+	reasoningTokens: number,
+	outputCost?: number,
+): Cell[] {
 	const totalOutput = outputTokens + reasoningTokens;
 	const hasReasoning = reasoningTokens > 0;
+	const outputContent = formatAggregateTokenWithCost(totalOutput, outputCost);
 
 	if (!hasReasoning) {
-		return [{ content: formatNumber(totalOutput), colSpan: 2, hAlign: 'right' as const }];
+		return [{ content: outputContent, colSpan: 2, hAlign: 'right' as const }];
 	}
 
 	const reasoningPct = formatPercent(reasoningTokens, totalOutput);
 
 	return [
 		{ content: `${formatNumber(reasoningTokens)} ${reasoningPct}`, hAlign: 'right' as const },
-		{ content: formatNumber(totalOutput), hAlign: 'right' as const },
+		{ content: outputContent, hAlign: 'right' as const },
 	];
+}
+
+function formatAggregateCellWithCost(
+	tokens: number,
+	pctStr: string,
+	cost: number | undefined,
+): string {
+	const tokenPart = `${formatNumber(tokens)} ${pctStr}`;
+	if (cost == null) {
+		return tokenPart;
+	}
+
+	return `${tokenPart} ${pc.green(formatCurrencyValue(cost))}`;
+}
+
+function formatAggregateTokenWithCost(tokens: number, cost: number | undefined): string {
+	const tokenPart = formatNumber(tokens);
+	if (cost == null) {
+		return tokenPart;
+	}
+
+	return `${tokenPart} ${pc.green(formatCurrencyValue(cost))}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,11 +292,14 @@ export function buildBreakdownCells(data: ModelTokenData, componentCosts?: Compo
 /**
  * Build breakdown cells for an aggregate (mixed-model) row.
  * No cost rates — just token counts with percentages on the token line.
+ * TODO(opencode): Support a dedicated percent display toggle in --breakdown
+ * and allow hiding percentages by default.
  */
 export function buildAggregateBreakdownCells(
 	inputTokens: number,
 	cacheCreationTokens: number,
 	cacheReadTokens: number,
+	costs?: Pick<AggregateColumnCosts, 'baseInputCost' | 'cacheCreateCost' | 'cacheReadCost'>,
 ): Cell[] {
 	const total = inputTokens + cacheCreationTokens + cacheReadTokens;
 	const hasCacheCreate = cacheCreationTokens > 0;
@@ -270,14 +308,18 @@ export function buildAggregateBreakdownCells(
 		const uncachedTokens = inputTokens + cacheCreationTokens;
 		const uncachedPct = formatPercent(uncachedTokens, total);
 		const crPct = formatPercent(cacheReadTokens, total);
+		const uncachedCost = (costs?.baseInputCost ?? 0) + (costs?.cacheCreateCost ?? 0);
 
 		return [
 			{
-				content: `${formatNumber(uncachedTokens)} ${uncachedPct}`,
+				content: formatAggregateCellWithCost(uncachedTokens, uncachedPct, uncachedCost),
 				colSpan: 2,
 				hAlign: 'right' as const,
 			},
-			{ content: `${formatNumber(cacheReadTokens)} ${crPct}`, hAlign: 'right' as const },
+			{
+				content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost),
+				hAlign: 'right' as const,
+			},
 		];
 	}
 
@@ -286,9 +328,18 @@ export function buildAggregateBreakdownCells(
 	const crPct = formatPercent(cacheReadTokens, total);
 
 	return [
-		{ content: `${formatNumber(inputTokens)} ${basePct}`, hAlign: 'right' as const },
-		{ content: `${formatNumber(cacheCreationTokens)} ${ccPct}`, hAlign: 'right' as const },
-		{ content: `${formatNumber(cacheReadTokens)} ${crPct}`, hAlign: 'right' as const },
+		{
+			content: formatAggregateCellWithCost(inputTokens, basePct, costs?.baseInputCost),
+			hAlign: 'right' as const,
+		},
+		{
+			content: formatAggregateCellWithCost(cacheCreationTokens, ccPct, costs?.cacheCreateCost),
+			hAlign: 'right' as const,
+		},
+		{
+			content: formatAggregateCellWithCost(cacheReadTokens, crPct, costs?.cacheReadCost),
+			hAlign: 'right' as const,
+		},
 	];
 }
 
@@ -436,7 +487,12 @@ export function buildAggregateSummaryRow(
 		cacheReadTokens: number;
 		totalCost: number;
 	},
-	options?: { bold?: boolean; yellow?: boolean; compact?: boolean },
+	options?: {
+		bold?: boolean;
+		yellow?: boolean;
+		compact?: boolean;
+		columnCosts?: AggregateColumnCosts;
+	},
 ): Row {
 	const wrap = (s: string): string => {
 		let result = s;
@@ -468,19 +524,35 @@ export function buildAggregateSummaryRow(
 			data.reasoningTokens > 0
 				? `${formatNumber(totalOutput)} ${formatPercent(data.reasoningTokens, totalOutput)}`
 				: formatNumber(totalOutput);
+		const inputContent = formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost);
+		const outputContent =
+			options?.columnCosts == null
+				? outputStr
+				: `${outputStr} ${pc.green(formatCurrencyValue(options.columnCosts.outputCost))}`;
 		row.push(
-			{ content: wrap(formatNumber(totalInput)), hAlign: 'right' as const },
-			{ content: wrap(outputStr), hAlign: 'right' as const },
+			{ content: wrap(inputContent), hAlign: 'right' as const },
+			{ content: wrap(outputContent), hAlign: 'right' as const },
 			{ content: costStr, hAlign: 'right' as const },
 		);
 		return row;
 	}
 
-	const outputCells = buildAggregateOutputCells(data.outputTokens, data.reasoningTokens);
+	const outputCells = buildAggregateOutputCells(
+		data.outputTokens,
+		data.reasoningTokens,
+		options?.columnCosts?.outputCost,
+	);
 	const breakdownCells = buildAggregateBreakdownCells(
 		data.inputTokens,
 		data.cacheCreationTokens,
 		data.cacheReadTokens,
+		options?.columnCosts == null
+			? undefined
+			: {
+					baseInputCost: options.columnCosts.baseInputCost,
+					cacheCreateCost: options.columnCosts.cacheCreateCost,
+					cacheReadCost: options.columnCosts.cacheReadCost,
+				},
 	);
 
 	// Wrap cell content with styling
@@ -493,7 +565,10 @@ export function buildAggregateSummaryRow(
 		});
 
 	row.push(
-		{ content: wrap(formatNumber(totalInput)), hAlign: 'right' as const },
+		{
+			content: wrap(formatAggregateTokenWithCost(totalInput, options?.columnCosts?.inputCost)),
+			hAlign: 'right' as const,
+		},
 		...wrapCells(outputCells),
 		...wrapCells(breakdownCells),
 		{ content: costStr, hAlign: 'right' as const },

@@ -135,6 +135,14 @@ export type ComponentCosts = {
 	cacheRead: TierBreakdown;
 };
 
+export type AggregateComponentCosts = {
+	inputCost: number;
+	outputCost: number;
+	baseInputCost: number;
+	cacheCreateCost: number;
+	cacheReadCost: number;
+};
+
 function emptyComponentCosts(): ComponentCosts {
 	return {
 		baseInput: emptyTier(),
@@ -247,6 +255,79 @@ export async function calculateComponentCostsFromEntries(
 	}
 
 	return result;
+}
+
+/**
+ * Calculate per-column component costs for a possibly mixed-model row.
+ *
+ * When entries do not report cache creation tokens, aggregate tables remap
+ * uncached input into the cache-create column. This function mirrors that
+ * remap for costs so token columns and dollar columns stay aligned.
+ */
+export async function calculateAggregateComponentCostsFromEntries(
+	entries: LoadedUsageEntry[],
+	fetcher: LiteLLMPricingFetcher,
+): Promise<AggregateComponentCosts> {
+	const groupedByModel = new Map<
+		string,
+		{ remapped: LoadedUsageEntry[]; normal: LoadedUsageEntry[] }
+	>();
+
+	for (const entry of entries) {
+		const modelEntries = groupedByModel.get(entry.model);
+		if (modelEntries == null) {
+			groupedByModel.set(entry.model, {
+				remapped: entry.usage.cacheCreationInputTokens > 0 ? [] : [entry],
+				normal: entry.usage.cacheCreationInputTokens > 0 ? [entry] : [],
+			});
+			continue;
+		}
+
+		if (entry.usage.cacheCreationInputTokens > 0) {
+			modelEntries.normal.push(entry);
+		} else {
+			modelEntries.remapped.push(entry);
+		}
+	}
+
+	let baseInputCost = 0;
+	let cacheCreateCost = 0;
+	let cacheReadCost = 0;
+	let outputCost = 0;
+
+	for (const [model, groupedEntries] of groupedByModel) {
+		if (groupedEntries.normal.length > 0) {
+			const componentCosts = await calculateComponentCostsFromEntries(
+				groupedEntries.normal,
+				model,
+				fetcher,
+			);
+			baseInputCost += tierTotalCost(componentCosts.baseInput);
+			cacheCreateCost += tierTotalCost(componentCosts.cacheCreate);
+			cacheReadCost += tierTotalCost(componentCosts.cacheRead);
+			outputCost += tierTotalCost(componentCosts.output);
+		}
+
+		if (groupedEntries.remapped.length > 0) {
+			const componentCosts = await calculateComponentCostsFromEntries(
+				groupedEntries.remapped,
+				model,
+				fetcher,
+			);
+			cacheCreateCost += tierTotalCost(componentCosts.baseInput);
+			cacheCreateCost += tierTotalCost(componentCosts.cacheCreate);
+			cacheReadCost += tierTotalCost(componentCosts.cacheRead);
+			outputCost += tierTotalCost(componentCosts.output);
+		}
+	}
+
+	return {
+		inputCost: baseInputCost + cacheCreateCost + cacheReadCost,
+		outputCost,
+		baseInputCost,
+		cacheCreateCost,
+		cacheReadCost,
+	};
 }
 
 // ---------------------------------------------------------------------------

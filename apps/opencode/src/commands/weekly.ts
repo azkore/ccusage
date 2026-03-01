@@ -9,7 +9,11 @@ import {
 	isDisplayedZeroCost,
 	resolveBreakdownDimensions,
 } from '../breakdown.ts';
-import { calculateComponentCostsFromEntries, calculateCostForEntry } from '../cost-utils.ts';
+import {
+	calculateAggregateComponentCostsFromEntries,
+	calculateComponentCostsFromEntries,
+	calculateCostForEntry,
+} from '../cost-utils.ts';
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
@@ -61,7 +65,7 @@ function getISOWeek(date: Date): string {
 export const weeklyCommand = define({
 	name: 'weekly',
 	description:
-		'Show OpenCode token usage grouped by week (ISO week format). Use --breakdown model for per-model rate details ($/M→$...).',
+		'Show OpenCode token usage grouped by week (ISO week format). Use --breakdown model,cost for per-model rate details ($/M→$...).',
 	args: {
 		id: {
 			type: 'string',
@@ -130,7 +134,7 @@ export const weeklyCommand = define({
 		breakdown: {
 			type: 'string',
 			description:
-				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, project, session. Use 'none' to disable.",
+				"Choose breakdown dimensions (comma-separated): source, provider, model, full-model, cost, project, session. Use 'none' to disable.",
 		},
 		'skip-zero': {
 			type: 'boolean',
@@ -153,18 +157,20 @@ export const weeklyCommand = define({
 		const breakdownInput =
 			typeof ctx.values.breakdown === 'string' ? ctx.values.breakdown.trim() : '';
 		const availableBreakdowns: Array<
-			'source' | 'provider' | 'model' | 'full-model' | 'project' | 'session'
-		> = ['source', 'provider', 'model', 'full-model', 'project', 'session'];
+			'source' | 'provider' | 'model' | 'full-model' | 'cost' | 'project' | 'session'
+		> = ['source', 'provider', 'model', 'full-model', 'cost', 'project', 'session'];
 		const breakdowns = resolveBreakdownDimensions({
 			full: ctx.values.full === true,
 			breakdownInput,
 			available: availableBreakdowns,
 		});
-		const showBreakdown = breakdowns.length > 0;
+		const groupingBreakdowns = breakdowns.filter((dimension) => dimension !== 'cost');
+		const showBreakdown = groupingBreakdowns.length > 0;
 		const includeSource = breakdowns.includes('source');
 		const includeProvider = breakdowns.includes('provider');
 		const includeModel = breakdowns.includes('model');
 		const includeFullModel = breakdowns.includes('full-model');
+		const includeCost = breakdowns.includes('cost');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
@@ -445,12 +451,16 @@ export const weeklyCommand = define({
 
 				for (const row of breakdownRows) {
 					const modelMetricsValues = Object.values(row.aggregate.modelBreakdown);
-					if ((includeModel || includeFullModel) && modelMetricsValues.length === 1) {
+					if (
+						includeCost &&
+						(includeModel || includeFullModel) &&
+						modelMetricsValues.length === 1
+					) {
 						const modelMetrics = modelMetricsValues[0];
 						if (modelMetrics != null) {
 							const pricingModel = row.entries[0]?.model ?? row.label;
 							const rowLabel =
-								breakdowns.length === 1 && includeModel
+								groupingBreakdowns.length === 1 && includeModel
 									? formatModelLabelForTable(row.label)
 									: formatBreakdownLabelForTable(row.label);
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
@@ -469,7 +479,15 @@ export const weeklyCommand = define({
 							'',
 							applyModelAliasForDisplay(row.label),
 							row.aggregate.totals,
-							{ compact },
+							includeCost
+								? {
+										compact,
+										columnCosts: await calculateAggregateComponentCostsFromEntries(
+											row.entries,
+											fetcher,
+										),
+									}
+								: { compact },
 						),
 					);
 				}
