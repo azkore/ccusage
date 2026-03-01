@@ -348,6 +348,10 @@ function formatCurrencyValue(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
+function isRoundedZeroCurrency(value: number): boolean {
+	return Number(value.toFixed(2)) <= 0;
+}
+
 // ---------------------------------------------------------------------------
 // Public types and helpers
 // ---------------------------------------------------------------------------
@@ -395,7 +399,7 @@ export function formatInputColumn(
 		tierTotalCost(componentCosts.baseInput) +
 		tierTotalCost(componentCosts.cacheCreate) +
 		tierTotalCost(componentCosts.cacheRead);
-	if (options?.hideZeroDetail === true && totalInputCost <= 0) {
+	if (options?.hideZeroDetail === true && isRoundedZeroCurrency(totalInputCost)) {
 		return formatNumber(totalInput);
 	}
 

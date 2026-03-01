@@ -72,12 +72,16 @@ function formatCurrencyValue(value: number): string {
 	return `$${value.toFixed(2)}`;
 }
 
+function isRoundedZeroCurrency(value: number): boolean {
+	return Number(value.toFixed(2)) <= 0;
+}
+
 function formatSingleTierCost(
 	ratePerMillion: number | null,
 	cost: number,
 	options: ValueDisplayOptions,
 ): string | null {
-	if (options.hideZeroDetail === true && cost <= 0) {
+	if (options.hideZeroDetail === true && isRoundedZeroCurrency(cost)) {
 		return null;
 	}
 
@@ -271,7 +275,11 @@ function formatAggregateCellWithCost(
 	cost: number | undefined,
 	options: ValueDisplayOptions,
 ): string {
-	if (options.hideZeroDetail === true && tokens <= 0 && (cost == null || cost <= 0)) {
+	if (
+		options.hideZeroDetail === true &&
+		tokens <= 0 &&
+		(cost == null || isRoundedZeroCurrency(cost))
+	) {
 		return '';
 	}
 
@@ -280,7 +288,7 @@ function formatAggregateCellWithCost(
 		return tokenPart;
 	}
 
-	if (options.hideZeroDetail === true && cost <= 0) {
+	if (options.hideZeroDetail === true && isRoundedZeroCurrency(cost)) {
 		return tokenPart;
 	}
 
@@ -292,7 +300,11 @@ function formatAggregateTokenWithCost(
 	cost: number | undefined,
 	options: ValueDisplayOptions,
 ): string {
-	if (options.hideZeroDetail === true && tokens <= 0 && (cost == null || cost <= 0)) {
+	if (
+		options.hideZeroDetail === true &&
+		tokens <= 0 &&
+		(cost == null || isRoundedZeroCurrency(cost))
+	) {
 		return '';
 	}
 
@@ -301,7 +313,7 @@ function formatAggregateTokenWithCost(
 		return tokenPart;
 	}
 
-	if (options.hideZeroDetail === true && cost <= 0) {
+	if (options.hideZeroDetail === true && isRoundedZeroCurrency(cost)) {
 		return tokenPart;
 	}
 
