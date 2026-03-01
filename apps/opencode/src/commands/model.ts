@@ -101,6 +101,10 @@ export const modelCommand = define({
 			type: 'string',
 			description: 'Filter to recent duration (e.g. 15m, 2h, 3d, 1w)',
 		},
+		utc: {
+			type: 'boolean',
+			description: 'Use UTC for parsing date/time filters',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -161,10 +165,12 @@ export const modelCommand = define({
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
+		const useUTC = ctx.values.utc === true;
 		const { sinceDate, untilDate } = resolveDateRangeFilters({
 			sinceInput,
 			untilInput,
 			lastInput,
+			useUTC,
 		});
 
 		const { entries, sessionMetadataMap } = await loadUsageData(source);

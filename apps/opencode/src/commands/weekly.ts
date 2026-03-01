@@ -43,7 +43,16 @@ import {
  * @param date - Date to get ISO week for
  * @returns Week string in format YYYY-Www (e.g., "2025-W51")
  */
-function getISOWeek(date: Date): string {
+function getISOWeek(date: Date, useUTC = false): string {
+	if (useUTC) {
+		const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+		const dayNum = d.getUTCDay() || 7;
+		d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+		const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+		const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+		return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+	}
+
 	// Copy date to avoid mutating original
 	const d = new Date(date.getTime());
 
@@ -117,6 +126,10 @@ export const weeklyCommand = define({
 			type: 'string',
 			description: 'Filter to recent duration (e.g. 15m, 2h, 3d, 1w)',
 		},
+		utc: {
+			type: 'boolean',
+			description: 'Use UTC for parsing and grouping dates/times',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -188,10 +201,12 @@ export const weeklyCommand = define({
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
+		const useUTC = ctx.values.utc === true;
 		const { sinceDate, untilDate } = resolveDateRangeFilters({
 			sinceInput,
 			untilInput,
 			lastInput,
+			useUTC,
 		});
 
 		const { entries, sessionMetadataMap } = await loadUsageData(source);
@@ -224,7 +239,7 @@ export const weeklyCommand = define({
 		);
 		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
 
-		const entriesByWeek = groupBy(filteredEntries, (entry) => getISOWeek(entry.timestamp));
+		const entriesByWeek = groupBy(filteredEntries, (entry) => getISOWeek(entry.timestamp, useUTC));
 
 		const weeklyData: Array<{
 			week: string;
@@ -595,6 +610,12 @@ if (import.meta.vitest != null) {
 			const date = new Date('2025-01-01T10:00:00Z');
 			const week = getISOWeek(date);
 			expect(week).toBe('2025-W01');
+		});
+
+		it('supports UTC week calculation when enabled', () => {
+			const date = new Date('2025-12-29T10:00:00Z');
+			const week = getISOWeek(date, true);
+			expect(week).toBe('2026-W01');
 		});
 	});
 }

@@ -17,7 +17,7 @@ import {
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import {
 	filterEntriesByDateRange,
-	formatLocalMonthKey,
+	formatMonthKey,
 	resolveDateRangeFilters,
 } from '../date-filter.ts';
 import {
@@ -96,6 +96,10 @@ export const monthlyCommand = define({
 			type: 'string',
 			description: 'Filter to recent duration (e.g. 15m, 2h, 3d, 1w)',
 		},
+		utc: {
+			type: 'boolean',
+			description: 'Use UTC for parsing and grouping dates/times',
+		},
 		json: {
 			type: 'boolean',
 			short: 'j',
@@ -167,10 +171,12 @@ export const monthlyCommand = define({
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
+		const useUTC = ctx.values.utc === true;
 		const { sinceDate, untilDate } = resolveDateRangeFilters({
 			sinceInput,
 			untilInput,
 			lastInput,
+			useUTC,
 		});
 
 		const { entries, sessionMetadataMap } = await loadUsageData(source);
@@ -204,7 +210,7 @@ export const monthlyCommand = define({
 		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
 
 		const entriesByMonth = groupBy(filteredEntries, (entry) =>
-			formatLocalMonthKey(entry.timestamp),
+			formatMonthKey(entry.timestamp, useUTC),
 		);
 
 		const monthlyData: Array<{
