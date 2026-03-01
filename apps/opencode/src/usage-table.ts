@@ -47,6 +47,14 @@ export type UsageTableConfig = {
 	hasModelsColumn?: boolean;
 	/** Whether percentage columns/details are enabled */
 	showPercent?: boolean;
+	/** Split value/detail into subcolumns for aggregate-only views */
+	splitValueDetailColumns?: boolean;
+	/** Per-metric percent subcolumn visibility for split views */
+	splitPercentColumns?: {
+		output?: boolean;
+		cacheCreate?: boolean;
+		cacheRead?: boolean;
+	};
 	/** Force compact mode (hide breakdown columns) */
 	forceCompact?: boolean;
 };
@@ -346,6 +354,51 @@ function formatAggregateTokenWithCost(
 	return `${tokenPart} ${pc.green(formatCurrencyValue(cost))}`;
 }
 
+function buildSplitValueCostCells(
+	tokens: number,
+	cost: number | undefined,
+	options: ValueDisplayOptions,
+): Cell[] {
+	const value = options.hideZeroDetail === true && tokens <= 0 ? '' : formatNumber(tokens);
+	const costCell =
+		cost == null || (options.hideZeroDetail === true && isRoundedZeroCurrency(cost))
+			? ''
+			: pc.green(formatCurrencyValue(cost));
+
+	return [
+		{ content: value, hAlign: 'right' as const },
+		{ content: costCell, hAlign: 'right' as const },
+	];
+}
+
+function buildSplitValuePercentCostCells(
+	tokens: number,
+	pctStr: string | undefined,
+	cost: number | undefined,
+	showPercentColumn: boolean,
+	options: ValueDisplayOptions,
+): Cell[] {
+	const value = options.hideZeroDetail === true && tokens <= 0 ? '' : formatNumber(tokens);
+	const percentCell = pctStr ?? '';
+	const costCell =
+		cost == null || (options.hideZeroDetail === true && isRoundedZeroCurrency(cost))
+			? ''
+			: pc.green(formatCurrencyValue(cost));
+
+	if (!showPercentColumn) {
+		return [
+			{ content: value, hAlign: 'right' as const },
+			{ content: costCell, hAlign: 'right' as const },
+		];
+	}
+
+	return [
+		{ content: value, hAlign: 'right' as const },
+		{ content: percentCell, hAlign: 'right' as const },
+		{ content: costCell, hAlign: 'right' as const },
+	];
+}
+
 // ---------------------------------------------------------------------------
 // Input breakdown cell formatters
 // ---------------------------------------------------------------------------
@@ -532,6 +585,12 @@ export function remapTokensForAggregate(entry: {
 export function createUsageTable(config: UsageTableConfig): Table.Table {
 	const hasModels = config.hasModelsColumn ?? true;
 	const showPercent = config.showPercent ?? false;
+	const splitValueDetailColumns = config.splitValueDetailColumns ?? false;
+	const splitPercentColumns = {
+		output: config.splitPercentColumns?.output ?? showPercent,
+		cacheCreate: config.splitPercentColumns?.cacheCreate ?? showPercent,
+		cacheRead: config.splitPercentColumns?.cacheRead ?? showPercent,
+	};
 
 	const terminalWidth =
 		Number.parseInt(process.env.COLUMNS ?? '', 10) || process.stdout.columns || 120;
@@ -564,25 +623,70 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 	if (hasModels) {
 		headerRow1.push({ content: pc.cyan('Models'), rowSpan: 2, vAlign: 'center' });
 	}
-	headerRow1.push({ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
-	headerRow1.push({
-		content: pc.cyan(showPercent ? 'Output/Reasoning%' : 'Output'),
-		rowSpan: 2,
-		vAlign: 'center',
-		hAlign: 'right',
-	});
-	headerRow1.push(
-		{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
-		{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
-	);
+	if (splitValueDetailColumns) {
+		const outputColSpan = 2 + (splitPercentColumns.output ? 1 : 0);
+		const baseColSpan = 2;
+		const cacheCreateColSpan = 2 + (splitPercentColumns.cacheCreate ? 1 : 0);
+		const cacheReadColSpan = 2 + (splitPercentColumns.cacheRead ? 1 : 0);
+		headerRow1.push({
+			content: pc.cyan('Input'),
+			colSpan: 2,
+			rowSpan: 2,
+			vAlign: 'center',
+			hAlign: 'center',
+		});
+		headerRow1.push({
+			content: pc.cyan(showPercent ? 'Output/Reasoning%' : 'Output'),
+			colSpan: outputColSpan,
+			rowSpan: 2,
+			vAlign: 'center',
+			hAlign: 'center',
+		});
+		headerRow1.push(
+			{
+				content: pc.cyan('Input Breakdown'),
+				colSpan: baseColSpan + cacheCreateColSpan + cacheReadColSpan,
+				hAlign: 'center',
+			},
+			{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+		);
+	} else {
+		headerRow1.push({ content: pc.cyan('Input'), rowSpan: 2, vAlign: 'center', hAlign: 'right' });
+		headerRow1.push({
+			content: pc.cyan(showPercent ? 'Output/Reasoning%' : 'Output'),
+			rowSpan: 2,
+			vAlign: 'center',
+			hAlign: 'right',
+		});
+		headerRow1.push(
+			{ content: pc.cyan('Input Breakdown'), colSpan: 3, hAlign: 'center' },
+			{ content: pc.cyan('Cost (USD)'), rowSpan: 2, vAlign: 'center', hAlign: 'right' },
+		);
+	}
 	table.push(headerRow1);
 
 	// --- Row 2: sub-headers for Input Breakdown columns ---
-	table.push([
-		{ content: pc.cyan('Base'), hAlign: 'right' },
-		{ content: pc.cyan('Cache Create'), hAlign: 'right' },
-		{ content: pc.cyan('Cache Read'), hAlign: 'right' },
-	]);
+	if (splitValueDetailColumns) {
+		table.push([
+			{ content: pc.cyan('Base'), colSpan: 2, hAlign: 'center' },
+			{
+				content: pc.cyan('Cache Create'),
+				colSpan: 2 + (splitPercentColumns.cacheCreate ? 1 : 0),
+				hAlign: 'center',
+			},
+			{
+				content: pc.cyan('Cache Read'),
+				colSpan: 2 + (splitPercentColumns.cacheRead ? 1 : 0),
+				hAlign: 'center',
+			},
+		]);
+	} else {
+		table.push([
+			{ content: pc.cyan('Base'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Create'), hAlign: 'right' },
+			{ content: pc.cyan('Cache Read'), hAlign: 'right' },
+		]);
+	}
 
 	return table;
 }
@@ -653,6 +757,12 @@ export function buildAggregateSummaryRow(
 		showPercent?: boolean;
 		hideZeroDetail?: boolean;
 		showReasoningPercent?: boolean;
+		splitValueDetailColumns?: boolean;
+		splitPercentColumns?: {
+			output?: boolean;
+			cacheCreate?: boolean;
+			cacheRead?: boolean;
+		};
 	},
 ): Row {
 	const wrap = (s: string): string => {
@@ -668,6 +778,12 @@ export function buildAggregateSummaryRow(
 
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
 	const totalOutput = data.outputTokens + data.reasoningTokens;
+	const splitValueDetailColumns = options?.splitValueDetailColumns ?? false;
+	const splitPercentColumns = {
+		output: options?.splitPercentColumns?.output ?? options?.showPercent ?? false,
+		cacheCreate: options?.splitPercentColumns?.cacheCreate ?? options?.showPercent ?? false,
+		cacheRead: options?.splitPercentColumns?.cacheRead ?? options?.showPercent ?? false,
+	};
 	const isTotalsRow = firstCell === 'Total' || modelsCell?.endsWith(' Total') === true;
 	const showReasoningPercent = options?.showReasoningPercent ?? !isTotalsRow;
 
@@ -680,6 +796,14 @@ export function buildAggregateSummaryRow(
 	if (modelsCell != null) {
 		row.push(wrap(modelsCell));
 	}
+
+	const wrapCells = (cells: Cell[]): Cell[] =>
+		cells.map((cell) => {
+			if (typeof cell === 'object' && 'content' in cell) {
+				return { ...cell, content: wrap(String(cell.content)) };
+			}
+			return wrap(String(cell));
+		});
 
 	if (options?.compact === true) {
 		// Compact: single output string, no breakdown columns
@@ -708,6 +832,86 @@ export function buildAggregateSummaryRow(
 		return row;
 	}
 
+	if (splitValueDetailColumns) {
+		const displayOptions: ValueDisplayOptions = {
+			showPercent: options?.showPercent,
+			hideZeroDetail: options?.hideZeroDetail,
+		};
+		const reasoningPct =
+			showReasoningPercent === true
+				? maybePlainPercent(data.reasoningTokens, totalOutput, displayOptions)
+				: undefined;
+		const outputPct = reasoningPct != null ? `r=${reasoningPct}` : undefined;
+		const inputCells = buildSplitValueCostCells(
+			totalInput,
+			options?.columnCosts?.inputCost,
+			displayOptions,
+		);
+		const outputCells = buildSplitValuePercentCostCells(
+			totalOutput,
+			outputPct,
+			options?.columnCosts?.outputCost,
+			splitPercentColumns.output,
+			displayOptions,
+		);
+
+		let breakdownCells: Cell[];
+		if (data.cacheCreationTokens > 0) {
+			const ccPct = maybePercent(data.cacheCreationTokens, totalInput, displayOptions);
+			const crPct = maybePercent(data.cacheReadTokens, totalInput, displayOptions);
+			breakdownCells = [
+				...buildSplitValueCostCells(
+					data.inputTokens,
+					options?.columnCosts?.baseInputCost,
+					displayOptions,
+				),
+				...buildSplitValuePercentCostCells(
+					data.cacheCreationTokens,
+					ccPct,
+					options?.columnCosts?.cacheCreateCost,
+					splitPercentColumns.cacheCreate,
+					displayOptions,
+				),
+				...buildSplitValuePercentCostCells(
+					data.cacheReadTokens,
+					crPct,
+					options?.columnCosts?.cacheReadCost,
+					splitPercentColumns.cacheRead,
+					displayOptions,
+				),
+			];
+		} else {
+			const uncachedTokens = data.inputTokens + data.cacheCreationTokens;
+			const uncachedPct = maybePercent(uncachedTokens, totalInput, displayOptions);
+			const uncachedCost =
+				(options?.columnCosts?.baseInputCost ?? 0) + (options?.columnCosts?.cacheCreateCost ?? 0);
+			const baseCells = buildSplitValueCostCells(0, undefined, displayOptions);
+			const uncachedCells = buildSplitValuePercentCostCells(
+				uncachedTokens,
+				uncachedPct,
+				uncachedCost,
+				splitPercentColumns.cacheCreate,
+				displayOptions,
+			);
+			const crPct = maybePercent(data.cacheReadTokens, totalInput, displayOptions);
+			breakdownCells = [
+				...baseCells,
+				...uncachedCells,
+				...buildSplitValuePercentCostCells(
+					data.cacheReadTokens,
+					crPct,
+					options?.columnCosts?.cacheReadCost,
+					splitPercentColumns.cacheRead,
+					displayOptions,
+				),
+			];
+		}
+
+		const splitCells = [...inputCells, ...outputCells, ...breakdownCells];
+		row.push(...wrapCells(splitCells), { content: costStr, hAlign: 'right' as const });
+		return row;
+	}
+
 	const outputCells = buildAggregateOutputCells(
 		data.outputTokens,
 		data.reasoningTokens,
@@ -731,15 +935,6 @@ export function buildAggregateSummaryRow(
 				},
 		{ showPercent: options?.showPercent, hideZeroDetail: options?.hideZeroDetail },
 	);
-
-	// Wrap cell content with styling
-	const wrapCells = (cells: Cell[]): Cell[] =>
-		cells.map((cell) => {
-			if (typeof cell === 'object' && 'content' in cell) {
-				return { ...cell, content: wrap(String(cell.content)) };
-			}
-			return wrap(String(cell));
-		});
 
 	row.push(
 		{

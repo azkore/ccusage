@@ -155,6 +155,15 @@ export const dailyCommand = define({
 		const includePercent = breakdowns.includes('percent');
 		const includeProject = breakdowns.includes('project');
 		const includeSession = breakdowns.includes('session');
+		const splitValueDetailColumns =
+			(includePercent || includeCost) && !(includeCost && (includeModel || includeFullModel));
+		const splitPercentColumns = includePercent
+			? {
+					output: showBreakdown,
+					cacheCreate: true,
+					cacheRead: true,
+				}
+			: undefined;
 		const sinceInput = typeof ctx.values.since === 'string' ? ctx.values.since.trim() : '';
 		const untilInput = typeof ctx.values.until === 'string' ? ctx.values.until.trim() : '';
 		const lastInput = typeof ctx.values.last === 'string' ? ctx.values.last.trim() : '';
@@ -375,6 +384,8 @@ export const dailyCommand = define({
 			firstColumnName: 'Date',
 			hasModelsColumn: true,
 			showPercent: includePercent,
+			splitValueDetailColumns,
+			splitPercentColumns,
 			forceCompact: Boolean(ctx.values.compact),
 		});
 		const compact = isCompactTable(table);
@@ -398,6 +409,8 @@ export const dailyCommand = define({
 					compact,
 					showPercent: includePercent,
 					hideZeroDetail: skipZero,
+					splitValueDetailColumns,
+					splitPercentColumns,
 					columnCosts: summaryColumnCosts,
 				}),
 			);
@@ -489,12 +502,20 @@ export const dailyCommand = define({
 										compact,
 										showPercent: includePercent,
 										hideZeroDetail: skipZero,
+										splitValueDetailColumns,
+										splitPercentColumns,
 										columnCosts: await calculateAggregateComponentCostsFromEntries(
 											row.entries,
 											fetcher,
 										),
 									}
-								: { compact, showPercent: includePercent, hideZeroDetail: skipZero },
+								: {
+										compact,
+										showPercent: includePercent,
+										hideZeroDetail: skipZero,
+										splitValueDetailColumns,
+										splitPercentColumns,
+									},
 						),
 					);
 				}
@@ -507,6 +528,8 @@ export const dailyCommand = define({
 				compact,
 				showPercent: includePercent,
 				hideZeroDetail: skipZero,
+				splitValueDetailColumns,
+				splitPercentColumns,
 				columnCosts: totalsColumnCosts,
 			}),
 		);
