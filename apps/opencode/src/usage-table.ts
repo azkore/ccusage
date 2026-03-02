@@ -491,7 +491,7 @@ export function buildOutputCells(
 	componentCosts?: ComponentCosts,
 	options: ValueDisplayOptions = {},
 ): Cell[] {
-	const totalOutput = data.outputTokens + data.reasoningTokens;
+	const totalOutput = data.outputTokens;
 	const showPercent = options.showPercent ?? true;
 
 	// Format the main output cell (total output tokens + cost)
@@ -524,7 +524,7 @@ export function buildAggregateOutputCells(
 	outputCost?: number,
 	options: ValueDisplayOptions = {},
 ): Cell[] {
-	const totalOutput = outputTokens + reasoningTokens;
+	const totalOutput = outputTokens;
 	const showPercent = options.showPercent ?? true;
 	const showReasoningPercent = options.showReasoningPercent ?? true;
 	const reasoningPct =
@@ -1053,7 +1053,7 @@ export function buildAggregateSummaryRow(
 	};
 
 	const totalInput = data.inputTokens + data.cacheCreationTokens + data.cacheReadTokens;
-	const totalOutput = data.outputTokens + data.reasoningTokens;
+	const totalOutput = data.outputTokens;
 	const splitValueDetailColumns = options?.splitValueDetailColumns ?? false;
 	const splitPercentColumns = {
 		output: options?.splitPercentColumns?.output ?? options?.showPercent ?? false,

@@ -38,7 +38,7 @@ export async function calculateCostForEntry(
 	const result = await fetcher.calculateCostFromTokens(
 		{
 			input_tokens: entry.usage.inputTokens,
-			output_tokens: entry.usage.outputTokens + entry.usage.reasoningTokens,
+			output_tokens: entry.usage.outputTokens,
 			cache_creation_input_tokens: entry.usage.cacheCreationInputTokens,
 			cache_read_input_tokens: entry.usage.cacheReadInputTokens,
 		},
@@ -216,7 +216,7 @@ export async function calculateComponentCostsFromEntries(
 			pricing.cache_creation_input_token_cost_above_200k_tokens,
 		);
 		const outSplit = splitTier(
-			entry.usage.outputTokens + entry.usage.reasoningTokens,
+			entry.usage.outputTokens,
 			pricing.output_cost_per_token,
 			pricing.output_cost_per_token_above_200k_tokens,
 		);
