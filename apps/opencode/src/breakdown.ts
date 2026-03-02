@@ -51,13 +51,22 @@ export function resolveBreakdownDimensions(args: {
 	return args.available.filter((dimension) => selected.has(dimension));
 }
 
-export function formatSourceLabel(source: 'opencode' | 'claude'): string {
-	return source === 'claude' ? 'Claude' : 'OpenCode';
-}
-
-export function formatReportSourceLabel(source: 'opencode' | 'claude' | 'all'): string {
+export function formatSourceLabel(source: 'opencode' | 'claude' | 'codex'): string {
 	if (source === 'claude') {
 		return 'Claude';
+	}
+	if (source === 'codex') {
+		return 'Codex';
+	}
+	return 'OpenCode';
+}
+
+export function formatReportSourceLabel(source: 'opencode' | 'claude' | 'codex' | 'all'): string {
+	if (source === 'claude') {
+		return 'Claude';
+	}
+	if (source === 'codex') {
+		return 'Codex';
 	}
 	if (source === 'all') {
 		return 'All Sources';

@@ -6,6 +6,7 @@
  */
 
 import { createReadStream, existsSync } from 'node:fs';
+import { readFile as readFileAsync } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
@@ -21,6 +22,10 @@ const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
 const CLAUDE_PROJECTS_DIR_NAME = 'projects';
 const DEFAULT_CLAUDE_CONFIG_PATH = '.config/claude';
 const DEFAULT_CLAUDE_CODE_PATH = '.claude';
+const CODEX_HOME_ENV = 'CODEX_HOME';
+const DEFAULT_CODEX_DIR = '.codex';
+const CODEX_SESSION_SUBDIR = 'sessions';
+const CODEX_SESSION_GLOB = '**/*.jsonl';
 const USER_HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
 const require = createRequire(import.meta.url);
 
@@ -91,7 +96,7 @@ export type LoadedUsageEntry = {
 	costUSD: number | null;
 };
 
-export type UsageSource = 'opencode' | 'claude' | 'all';
+export type UsageSource = 'opencode' | 'claude' | 'codex' | 'all';
 
 export type LoadedSessionMetadata = {
 	id: string;
@@ -170,11 +175,11 @@ export function parseUsageSource(value: string | undefined): UsageSource {
 	if (normalized === 'claude') {
 		return 'claude';
 	}
-	if (normalized === 'all') {
-		return 'all';
+	if (normalized === 'codex') {
+		return 'codex';
 	}
 
-	throw new Error("Invalid --source value. Use 'opencode', 'claude', or 'all'.");
+	throw new Error("Invalid --source value. Use 'opencode', 'claude', 'codex', or 'all'.");
 }
 
 function getClaudePaths(): string[] {
@@ -457,6 +462,276 @@ async function loadClaudeData(): Promise<{
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Codex loader — ported from apps/codex/src/data-loader.ts
+// ---------------------------------------------------------------------------
+
+type CodexRawUsage = {
+	input_tokens: number;
+	cached_input_tokens: number;
+	output_tokens: number;
+	reasoning_output_tokens: number;
+	total_tokens: number;
+};
+
+function codexEnsureNumber(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeCodexRawUsage(value: unknown): CodexRawUsage | null {
+	if (value == null || typeof value !== 'object') {
+		return null;
+	}
+
+	const record = value as Record<string, unknown>;
+	const input = codexEnsureNumber(record.input_tokens);
+	const cached = codexEnsureNumber(record.cached_input_tokens ?? record.cache_read_input_tokens);
+	const output = codexEnsureNumber(record.output_tokens);
+	const reasoning = codexEnsureNumber(record.reasoning_output_tokens);
+	const total = codexEnsureNumber(record.total_tokens);
+
+	return {
+		input_tokens: input,
+		cached_input_tokens: cached,
+		output_tokens: output,
+		reasoning_output_tokens: reasoning,
+		total_tokens: total > 0 ? total : input + output,
+	};
+}
+
+function subtractCodexRawUsage(
+	current: CodexRawUsage,
+	previous: CodexRawUsage | null,
+): CodexRawUsage {
+	return {
+		input_tokens: Math.max(current.input_tokens - (previous?.input_tokens ?? 0), 0),
+		cached_input_tokens: Math.max(
+			current.cached_input_tokens - (previous?.cached_input_tokens ?? 0),
+			0,
+		),
+		output_tokens: Math.max(current.output_tokens - (previous?.output_tokens ?? 0), 0),
+		reasoning_output_tokens: Math.max(
+			current.reasoning_output_tokens - (previous?.reasoning_output_tokens ?? 0),
+			0,
+		),
+		total_tokens: Math.max(current.total_tokens - (previous?.total_tokens ?? 0), 0),
+	};
+}
+
+function codexAsNonEmptyString(value: unknown): string | undefined {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	return trimmed === '' ? undefined : trimmed;
+}
+
+function extractCodexModel(payload: Record<string, unknown>): string | undefined {
+	const info = payload.info;
+	if (info != null && typeof info === 'object') {
+		const infoRecord = info as Record<string, unknown>;
+		for (const key of ['model', 'model_name']) {
+			const model = codexAsNonEmptyString(infoRecord[key]);
+			if (model != null) {
+				return model;
+			}
+		}
+
+		const metadata = infoRecord.metadata;
+		if (metadata != null && typeof metadata === 'object') {
+			const model = codexAsNonEmptyString((metadata as Record<string, unknown>).model);
+			if (model != null) {
+				return model;
+			}
+		}
+	}
+
+	const fallbackModel = codexAsNonEmptyString(payload.model);
+	if (fallbackModel != null) {
+		return fallbackModel;
+	}
+
+	const metadata = payload.metadata;
+	if (metadata != null && typeof metadata === 'object') {
+		const model = codexAsNonEmptyString((metadata as Record<string, unknown>).model);
+		if (model != null) {
+			return model;
+		}
+	}
+
+	return undefined;
+}
+
+function getCodexSessionDir(): string | null {
+	const envPath = (process.env[CODEX_HOME_ENV] ?? '').trim();
+	const codexHome =
+		envPath !== '' ? path.resolve(envPath) : path.join(USER_HOME_DIR, DEFAULT_CODEX_DIR);
+	const sessionsDir = path.join(codexHome, CODEX_SESSION_SUBDIR);
+
+	return isDirectorySync(sessionsDir) ? sessionsDir : null;
+}
+
+const CODEX_LEGACY_FALLBACK_MODEL = 'gpt-5';
+
+async function loadCodexData(): Promise<{
+	entries: LoadedUsageEntry[];
+	sessionMetadataMap: Map<string, LoadedSessionMetadata>;
+}> {
+	const sessionDir = getCodexSessionDir();
+	if (sessionDir == null) {
+		return { entries: [], sessionMetadataMap: new Map() };
+	}
+
+	const entries: LoadedUsageEntry[] = [];
+	const sessionMetadataMap = new Map<string, LoadedSessionMetadata>();
+
+	const files = await glob(CODEX_SESSION_GLOB, {
+		cwd: sessionDir,
+		absolute: true,
+	}).catch(() => [] as string[]);
+
+	for (const filePath of files) {
+		const relPath = path.relative(sessionDir, filePath);
+		const sessionId = relPath
+			.split(path.sep)
+			.join('/')
+			.replace(/\.jsonl$/i, '');
+
+		let fileContent: string;
+		try {
+			fileContent = await readFileAsync(filePath, 'utf-8');
+		} catch {
+			continue;
+		}
+
+		let previousTotals: CodexRawUsage | null = null;
+		let currentModel: string | undefined;
+		let currentModelIsFallback = false;
+		const lines = fileContent.split(/\r?\n/);
+
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed === '') {
+				continue;
+			}
+
+			let parsed: Record<string, unknown>;
+			try {
+				parsed = JSON.parse(trimmed) as Record<string, unknown>;
+			} catch {
+				continue;
+			}
+
+			const entryType = parsed.type;
+			const payload = parsed.payload as Record<string, unknown> | undefined;
+			const timestamp = parsed.timestamp;
+
+			if (typeof entryType !== 'string') {
+				continue;
+			}
+
+			// Extract model from turn_context entries
+			if (entryType === 'turn_context' && payload != null) {
+				const contextModel = extractCodexModel(payload);
+				if (contextModel != null) {
+					currentModel = contextModel;
+					currentModelIsFallback = false;
+				}
+				continue;
+			}
+
+			if (entryType !== 'event_msg') {
+				continue;
+			}
+
+			if (payload == null || payload.type !== 'token_count') {
+				continue;
+			}
+
+			if (typeof timestamp !== 'string') {
+				continue;
+			}
+
+			const info = payload.info as Record<string, unknown> | undefined;
+			const lastUsage = normalizeCodexRawUsage(info?.last_token_usage);
+			const totalUsage = normalizeCodexRawUsage(info?.total_token_usage);
+
+			let raw = lastUsage;
+			if (raw == null && totalUsage != null) {
+				raw = subtractCodexRawUsage(totalUsage, previousTotals);
+			}
+
+			if (totalUsage != null) {
+				previousTotals = totalUsage;
+			}
+
+			if (raw == null) {
+				continue;
+			}
+
+			const cachedInput = Math.min(raw.cached_input_tokens, raw.input_tokens);
+
+			if (
+				raw.input_tokens === 0 &&
+				cachedInput === 0 &&
+				raw.output_tokens === 0 &&
+				raw.reasoning_output_tokens === 0
+			) {
+				continue;
+			}
+
+			const extractionSource = Object.assign({}, payload, { info });
+			const extractedModel = extractCodexModel(extractionSource);
+			if (extractedModel != null) {
+				currentModel = extractedModel;
+				currentModelIsFallback = false;
+			}
+
+			let model = extractedModel ?? currentModel;
+			if (model == null) {
+				model = CODEX_LEGACY_FALLBACK_MODEL;
+				currentModel = model;
+				currentModelIsFallback = true;
+			} else if (extractedModel == null && currentModelIsFallback) {
+				// still using fallback
+			}
+
+			const parsedTimestamp = new Date(timestamp);
+			if (Number.isNaN(parsedTimestamp.getTime())) {
+				continue;
+			}
+
+			if (!sessionMetadataMap.has(sessionId)) {
+				sessionMetadataMap.set(sessionId, {
+					id: sessionId,
+					parentID: null,
+					title: sessionId,
+					projectID: 'codex',
+					directory: path.dirname(relPath),
+				});
+			}
+
+			entries.push({
+				timestamp: parsedTimestamp,
+				sessionID: sessionId,
+				source: 'codex',
+				provider: inferProviderFromModel(model),
+				usage: {
+					inputTokens: raw.input_tokens - cachedInput,
+					outputTokens: raw.output_tokens,
+					reasoningTokens: raw.reasoning_output_tokens,
+					cacheCreationInputTokens: 0,
+					cacheReadInputTokens: cachedInput,
+				},
+				model,
+				costUSD: null,
+			});
+		}
+	}
+
+	return { entries, sessionMetadataMap };
+}
+
 function mergeSessionMetadataMaps(
 	...maps: Array<Map<string, LoadedSessionMetadata>>
 ): Map<string, LoadedSessionMetadata> {
@@ -488,14 +763,23 @@ export async function loadUsageData(source: UsageSource): Promise<{
 		return loadClaudeData();
 	}
 
-	const [openCodeEntries, openCodeSessions, claudeData] = await Promise.all([
+	if (source === 'codex') {
+		return loadCodexData();
+	}
+
+	const [openCodeEntries, openCodeSessions, claudeData, codexData] = await Promise.all([
 		loadOpenCodeMessages(),
 		loadOpenCodeSessions(),
 		loadClaudeData(),
+		loadCodexData(),
 	]);
 
 	return {
-		entries: [...openCodeEntries, ...claudeData.entries],
-		sessionMetadataMap: mergeSessionMetadataMaps(openCodeSessions, claudeData.sessionMetadataMap),
+		entries: [...openCodeEntries, ...claudeData.entries, ...codexData.entries],
+		sessionMetadataMap: mergeSessionMetadataMaps(
+			openCodeSessions,
+			claudeData.sessionMetadataMap,
+			codexData.sessionMetadataMap,
+		),
 	};
 }

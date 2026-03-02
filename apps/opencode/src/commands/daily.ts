@@ -83,7 +83,7 @@ export const dailyCommand = define({
 		source: {
 			type: 'string',
 			short: 's',
-			description: 'Data source: opencode, claude, or all (default: all)',
+			description: 'Data source: opencode, claude, codex, or all (default: all)',
 		},
 		since: {
 			type: 'string',
