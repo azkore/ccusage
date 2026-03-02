@@ -31,7 +31,6 @@ import {
 	buildModelBreakdownRow,
 	createUsageTable,
 	isCompactTable,
-	remapTokensForAggregate,
 } from '../usage-table.ts';
 
 type SessionBreakdown = ModelTokenData & {
@@ -234,12 +233,11 @@ export const modelCommand = define({
 			for (const entry of modelEntries) {
 				const cost = await calculateCostForEntry(entry, fetcher);
 				entryCostMap.set(entry, cost);
-				const mapped = remapTokensForAggregate(entry.usage);
-				inputTokens += mapped.base;
+				inputTokens += entry.usage.inputTokens;
 				outputTokens += entry.usage.outputTokens;
 				reasoningTokens += entry.usage.reasoningTokens;
-				cacheCreationTokens += mapped.cacheCreate;
-				cacheReadTokens += mapped.cacheRead;
+				cacheCreationTokens += entry.usage.cacheCreationInputTokens;
+				cacheReadTokens += entry.usage.cacheReadInputTokens;
 				totalCost += cost;
 
 				const metadata = sessionMetadataMap.get(entry.sessionID);
