@@ -247,24 +247,60 @@ function getCellContentAndSpan(cell: Cell): { content: string; colSpan: number }
 	return { content: String(cell ?? ''), colSpan: 1 };
 }
 
+function getCellRowSpan(cell: Cell): number {
+	if (typeof cell === 'object' && cell != null && 'rowSpan' in cell) {
+		const rowSpan = (cell as { rowSpan?: number }).rowSpan;
+		return typeof rowSpan === 'number' && rowSpan > 1 ? rowSpan : 1;
+	}
+	return 1;
+}
+
 function computeNaturalColWidths(table: Table.Table, columnMeta: ColumnMeta[]): number[] {
 	const widths = columnMeta.map((col) => Math.max(1, col.minWidth));
 	const columnCount = widths.length;
+
+	// Track how many more rows each column is occupied by a rowSpan cell.
+	// When > 0, the column is still "owned" by a cell from a previous row.
+	const rowSpanRemaining: number[] = Array.from({ length: columnCount }, () => 0);
 
 	for (const rawRow of table as unknown as Cell[][]) {
 		if (!Array.isArray(rawRow)) {
 			continue;
 		}
 
+		// Decrement rowSpan counters from prior rows before processing this row
+		for (let c = 0; c < columnCount; c += 1) {
+			if ((rowSpanRemaining[c] ?? 0) > 0) {
+				rowSpanRemaining[c] = (rowSpanRemaining[c] ?? 0) - 1;
+			}
+		}
+
 		let columnIndex = 0;
 		for (const rawCell of rawRow) {
+			// Skip columns still occupied by a rowSpan cell from a prior row
+			while (columnIndex < columnCount && (rowSpanRemaining[columnIndex] ?? 0) > 0) {
+				columnIndex += 1;
+			}
 			if (columnIndex >= columnCount) {
 				break;
 			}
 
 			const { content, colSpan } = getCellContentAndSpan(rawCell);
 			const span = Math.max(1, Math.min(colSpan, columnCount - columnIndex));
+			const rowSpan = getCellRowSpan(rawCell);
 			const textWidth = getRenderedMaxLineWidth(content) + 2;
+
+			// Record rowSpan occupancy for subsequent rows (including this row's
+			// remaining processing — the value won't be decremented until the
+			// *next* row starts, so cells later in this row also skip correctly)
+			if (rowSpan > 1) {
+				for (let s = 0; s < span; s += 1) {
+					const ci = columnIndex + s;
+					if (ci < columnCount) {
+						rowSpanRemaining[ci] = rowSpan;
+					}
+				}
+			}
 
 			if (span === 1) {
 				widths[columnIndex] = Math.max(widths[columnIndex] ?? 1, textWidth);
@@ -741,7 +777,8 @@ export function buildAggregateBreakdownCells(
 		const uncachedTokens = inputTokens + cacheCreationTokens;
 		const uncachedPct = maybePercent(uncachedTokens, total, options);
 		const crPct = maybePercent(cacheReadTokens, total, options);
-		const uncachedCost = (costs?.baseInputCost ?? 0) + (costs?.cacheCreateCost ?? 0);
+		const uncachedCost =
+			costs != null ? (costs.baseInputCost ?? 0) + (costs.cacheCreateCost ?? 0) : undefined;
 
 		return [
 			{
@@ -879,7 +916,8 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 		const naturalColWidths = computeNaturalColWidths(mutableTable, fullColumnMeta);
 
 		const naturalRender = renderWithWidths(naturalColWidths, true);
-		if (getRenderedMaxLineWidth(naturalRender) <= currentTerminalWidth) {
+		const naturalRenderedWidth = getRenderedMaxLineWidth(naturalRender);
+		if (naturalRenderedWidth <= currentTerminalWidth) {
 			return naturalRender;
 		}
 
