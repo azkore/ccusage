@@ -257,23 +257,37 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 	const DatabaseSync = getDatabaseSyncCtor();
 	const db = new DatabaseSync(dbPath, { readOnly: true });
 	try {
+		// Use ROW_NUMBER() to deduplicate messages copied by OpenCode's fork feature.
+		// Forked sessions deep-copy messages with identical time_created + modelID
+		// but different session IDs. We keep only the earliest session's copy
+		// (session IDs are time-ordered ascending) so forked costs aren't double-counted.
 		const rows = db
 			.prepare(
-				`SELECT
-					session_id,
-					json_extract(data, '$.providerID') as providerID,
-					json_extract(data, '$.modelID') as modelID,
-					json_extract(data, '$.tokens.input') as input,
-					json_extract(data, '$.tokens.output') as output,
-					json_extract(data, '$.tokens.reasoning') as reasoning,
-					json_extract(data, '$.tokens.cache.read') as cache_read,
-					json_extract(data, '$.tokens.cache.write') as cache_write,
-					json_extract(data, '$.cost') as cost,
-					json_extract(data, '$.time.created') as time_created
-				FROM message
-				WHERE json_extract(data, '$.role') = 'assistant'
-					AND json_extract(data, '$.providerID') IS NOT NULL
-					AND json_extract(data, '$.modelID') IS NOT NULL`,
+				`WITH ranked AS (
+					SELECT
+						session_id,
+						json_extract(data, '$.providerID') as providerID,
+						json_extract(data, '$.modelID') as modelID,
+						json_extract(data, '$.tokens.input') as input,
+						json_extract(data, '$.tokens.output') as output,
+						json_extract(data, '$.tokens.reasoning') as reasoning,
+						json_extract(data, '$.tokens.cache.read') as cache_read,
+						json_extract(data, '$.tokens.cache.write') as cache_write,
+						json_extract(data, '$.cost') as cost,
+						time_created,
+						ROW_NUMBER() OVER (
+							PARTITION BY time_created, json_extract(data, '$.modelID')
+							ORDER BY session_id
+						) as rn
+					FROM message
+					WHERE json_extract(data, '$.role') = 'assistant'
+						AND json_extract(data, '$.providerID') IS NOT NULL
+						AND json_extract(data, '$.modelID') IS NOT NULL
+				)
+				SELECT session_id, providerID, modelID, input, output,
+					reasoning, cache_read, cache_write, cost, time_created
+				FROM ranked
+				WHERE rn = 1`,
 			)
 			.all() as MessageRow[];
 
