@@ -1,5 +1,6 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
+import type { Colorizer } from '../model-alias.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
@@ -18,14 +19,17 @@ import {
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
-	createFullModelLabel,
 	extractProjectName,
 	filterEntriesBySessionProjectFilters,
 	parseFilterInputs,
 } from '../entry-filter.ts';
 import { logger } from '../logger.ts';
 import { setModelAliasEnabled } from '../model-alias.ts';
-import { createModelLabelResolver, formatModelLabelForTable } from '../model-display.ts';
+import {
+	createModelLabelResolver,
+	formatModelLabelForTable,
+	resolveBreakdownModelKey,
+} from '../model-display.ts';
 import {
 	buildAggregateSummaryRow,
 	buildModelBreakdownRow,
@@ -202,7 +206,23 @@ export const modelCommand = define({
 			showProviders ? 'always' : 'never',
 		);
 		const plainModelLabelForEntry = createModelLabelResolver(filteredEntries, 'never');
-		const entriesByModel = groupBy(filteredEntries, (entry) => modelLabelForEntry(entry));
+		const topLevelColorizerMap = new Map<string, Colorizer>();
+		const entriesByModel = groupBy(filteredEntries, (entry) => {
+			const { key, colorizer } = resolveBreakdownModelKey(
+				entry,
+				{
+					source: false,
+					provider: false,
+					model: true,
+					fullModel: false,
+				},
+				modelLabelForEntry,
+			);
+			if (colorizer != null) {
+				topLevelColorizerMap.set(key, colorizer);
+			}
+			return key;
+		});
 
 		const modelData: Array<
 			ModelTokenData & {
@@ -461,6 +481,7 @@ export const modelCommand = define({
 
 		if (showBreakdown && !compact) {
 			const breakdownSourceEntries = visibleModelData.flatMap((data) => data.entries);
+			const breakdownColorizerMap = new Map<string, Colorizer>();
 			const groupedEntries = groupBy(breakdownSourceEntries, (entry) => {
 				const keyParts: string[] = [];
 				const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -468,17 +489,18 @@ export const modelCommand = define({
 					metadata?.directory ?? 'unknown',
 					metadata?.projectID ?? '',
 				);
-				const modelKey = includeFullModel
-					? createFullModelLabel(entry)
-					: includeProvider
-						? plainModelLabelForEntry(entry)
-						: modelLabelForEntry(entry);
-
-				if (includeSource && !includeFullModel) {
-					keyParts.push(entry.source);
-				}
-				if (includeProvider && !includeFullModel) {
-					keyParts.push(entry.provider);
+				const { key: modelKey, colorizer } = resolveBreakdownModelKey(
+					entry,
+					{
+						source: includeSource,
+						provider: includeProvider,
+						model: true,
+						fullModel: includeFullModel,
+					},
+					includeProvider ? plainModelLabelForEntry : modelLabelForEntry,
+				);
+				if (modelKey !== '') {
+					keyParts.push(modelKey);
 				}
 				if (includeProject) {
 					keyParts.push(projectName);
@@ -487,13 +509,17 @@ export const modelCommand = define({
 					keyParts.push(entry.sessionID);
 				}
 
-				keyParts.push(modelKey);
-				return keyParts.join('/');
+				const groupKey = keyParts.join('/');
+				if (colorizer != null) {
+					breakdownColorizerMap.set(groupKey, colorizer);
+				}
+				return groupKey;
 			});
 
 			const breakdownRows = Object.entries(groupedEntries)
 				.map(([label, entries]) => ({
 					label,
+					colorizer: breakdownColorizerMap.get(label),
 					entries,
 					totals: aggregateEntries(entries),
 				}))
@@ -511,7 +537,7 @@ export const modelCommand = define({
 
 					table.push(
 						buildModelBreakdownRow(
-							formatModelLabelForTable(row.label),
+							formatModelLabelForTable(row.label, row.colorizer),
 							null,
 							row.totals,
 							componentCosts,
@@ -522,11 +548,16 @@ export const modelCommand = define({
 				}
 
 				table.push(
-					buildAggregateSummaryRow(formatModelLabelForTable(row.label), null, row.totals, {
-						compact,
-						showPercent: includePercent,
-						hideZeroDetail: skipZero,
-					}),
+					buildAggregateSummaryRow(
+						formatModelLabelForTable(row.label, row.colorizer),
+						null,
+						row.totals,
+						{
+							compact,
+							showPercent: includePercent,
+							hideZeroDetail: skipZero,
+						},
+					),
 				);
 			}
 		} else {
@@ -534,7 +565,7 @@ export const modelCommand = define({
 				// Model summary rows use per-model costs (not aggregate)
 				table.push(
 					buildModelBreakdownRow(
-						pc.bold(formatModelLabelForTable(data.model)),
+						pc.bold(formatModelLabelForTable(data.model, topLevelColorizerMap.get(data.model))),
 						null,
 						data,
 						includeCost ? data.componentCosts : undefined,

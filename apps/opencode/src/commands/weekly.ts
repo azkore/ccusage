@@ -1,5 +1,6 @@
 import type { ComponentCosts, ModelTokenData } from '../cost-utils.ts';
 import type { LoadedUsageEntry } from '../data-loader.ts';
+import type { Colorizer } from '../model-alias.ts';
 import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
@@ -18,7 +19,6 @@ import {
 import { loadUsageData, parseUsageSource } from '../data-loader.ts';
 import { filterEntriesByDateRange, resolveDateRangeFilters } from '../date-filter.ts';
 import {
-	createFullModelLabel,
 	extractProjectName,
 	filterEntriesBySessionProjectFilters,
 	parseFilterInputs,
@@ -26,9 +26,9 @@ import {
 import { logger } from '../logger.ts';
 import { setModelAliasEnabled } from '../model-alias.ts';
 import {
-	applyModelAliasForDisplay,
 	createModelLabelResolver,
 	formatModelLabelForTable,
+	resolveBreakdownModelKey,
 } from '../model-display.ts';
 import {
 	buildAggregateSummaryRow,
@@ -456,6 +456,7 @@ export const weeklyCommand = define({
 			);
 
 			if (showExpandedBreakdown) {
+				const colorizerMap = new Map<string, Colorizer>();
 				const groupedEntries = groupBy(weekEntries, (entry) => {
 					const keyParts: string[] = [];
 					const metadata = sessionMetadataMap.get(entry.sessionID);
@@ -463,25 +464,18 @@ export const weeklyCommand = define({
 						metadata?.directory ?? 'unknown',
 						metadata?.projectID ?? '',
 					);
-					const modelKey = includeProvider
-						? plainModelLabelForEntry(entry)
-						: modelLabelForEntry(entry);
-					if (includeFullModel) {
-						keyParts.push(createFullModelLabel(entry));
-					} else {
-						if (includeSource) {
-							keyParts.push(entry.source);
-						}
-						if (includeProvider && includeModel) {
-							keyParts.push(`${entry.provider}/${modelKey}`);
-						} else {
-							if (includeProvider) {
-								keyParts.push(entry.provider);
-							}
-							if (includeModel) {
-								keyParts.push(modelKey);
-							}
-						}
+					const { key: modelKey, colorizer } = resolveBreakdownModelKey(
+						entry,
+						{
+							source: includeSource,
+							provider: includeProvider,
+							model: includeModel,
+							fullModel: includeFullModel,
+						},
+						includeProvider ? plainModelLabelForEntry : modelLabelForEntry,
+					);
+					if (modelKey !== '') {
+						keyParts.push(modelKey);
 					}
 					if (includeProject) {
 						keyParts.push(projectName);
@@ -490,12 +484,17 @@ export const weeklyCommand = define({
 						keyParts.push(entry.sessionID);
 					}
 
-					return keyParts.join('\u001F');
+					const groupKey = keyParts.join('\u001F');
+					if (colorizer != null) {
+						colorizerMap.set(groupKey, colorizer);
+					}
+					return groupKey;
 				});
 
 				const breakdownRows = Object.entries(groupedEntries)
 					.map(([groupKey, groupRows]) => ({
 						label: groupKey.split('\u001F').join('/'),
+						colorizer: colorizerMap.get(groupKey),
 						entries: groupRows,
 						aggregate: aggregateEntries(groupRows),
 					}))
@@ -514,8 +513,8 @@ export const weeklyCommand = define({
 							const pricingModel = row.entries[0]?.model ?? row.label;
 							const rowLabel =
 								groupingBreakdowns.length === 1 && includeModel
-									? formatModelLabelForTable(row.label)
-									: formatBreakdownLabelForTable(row.label);
+									? formatModelLabelForTable(row.label, row.colorizer)
+									: formatBreakdownLabelForTable(row.label, row.colorizer);
 							const componentCosts: ComponentCosts = await calculateComponentCostsFromEntries(
 								row.entries,
 								pricingModel,
@@ -535,7 +534,7 @@ export const weeklyCommand = define({
 					table.push(
 						buildAggregateSummaryRow(
 							'',
-							applyModelAliasForDisplay(row.label),
+							row.colorizer?.(row.label) ?? row.label,
 							row.aggregate.totals,
 							includeCost
 								? {

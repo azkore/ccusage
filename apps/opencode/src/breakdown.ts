@@ -1,3 +1,4 @@
+import type { Colorizer } from './model-alias.ts';
 import { resolveModelAlias } from './model-alias.ts';
 
 export type BreakdownDimension =
@@ -75,16 +76,15 @@ export function formatReportSourceLabel(source: 'opencode' | 'claude' | 'codex' 
 	return 'OpenCode';
 }
 
-export function formatBreakdownLabelForTable(label: string): string {
-	const resolvedAlias = resolveModelAlias(label);
-	const plainLabel = resolvedAlias.label;
-	const slashIndex = plainLabel.lastIndexOf('/');
-	if (slashIndex <= 0 || slashIndex >= plainLabel.length - 1) {
-		return resolvedAlias.colorizer?.(plainLabel) ?? plainLabel;
+export function formatBreakdownLabelForTable(label: string, colorizer?: Colorizer): string {
+	const color = colorizer ?? resolveModelAlias(label).colorizer;
+	const slashIndex = label.lastIndexOf('/');
+	if (slashIndex <= 0 || slashIndex >= label.length - 1) {
+		return color?.(label) ?? label;
 	}
 
-	const formattedLabel = `${plainLabel.slice(0, slashIndex + 1)}\n${plainLabel.slice(slashIndex + 1)}`;
-	return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
+	const formattedLabel = `${label.slice(0, slashIndex + 1)}\n${label.slice(slashIndex + 1)}`;
+	return color?.(formattedLabel) ?? formattedLabel;
 }
 
 export function isDisplayedZeroCost(totalCost: number): boolean {

@@ -1,4 +1,6 @@
 import type { LoadedUsageEntry } from './data-loader.ts';
+import type { Colorizer } from './model-alias.ts';
+import { createFullModelLabel } from './entry-filter.ts';
 import { applyModelAlias, resolveModelAlias } from './model-alias.ts';
 
 export type ProviderDisplayMode = 'always' | 'never' | 'auto';
@@ -54,22 +56,62 @@ export function createModelLabelResolver(
 	};
 }
 
-export function formatModelLabelForTable(modelLabel: string): string {
-	const resolvedAlias = resolveModelAlias(modelLabel);
-	const plainLabel = resolvedAlias.label;
-	const slashIndex = plainLabel.indexOf('/');
-	if (slashIndex <= 0) {
-		const dateLikeSuffix = plainLabel.match(/-(\d{6,})$/);
-		if (dateLikeSuffix == null || dateLikeSuffix.index == null) {
-			return resolvedAlias.colorizer?.(plainLabel) ?? plainLabel;
+/**
+ * Build the model-column label used for breakdown grouping and display.
+ *
+ * Alias replacement is applied as a plain string replacement on the final
+ * model label (the same value shown in the Models column).
+ */
+export function resolveBreakdownModelKey(
+	entry: Pick<LoadedUsageEntry, 'source' | 'provider' | 'model'>,
+	dimensions: {
+		source: boolean;
+		provider: boolean;
+		model: boolean;
+		fullModel: boolean;
+	},
+	modelLabelFn: (entry: Pick<LoadedUsageEntry, 'model' | 'provider'>) => string,
+): { key: string; colorizer?: Colorizer } {
+	const parts: string[] = [];
+	if (dimensions.fullModel) {
+		parts.push(createFullModelLabel(entry));
+	} else {
+		if (dimensions.source) {
+			parts.push(entry.source);
 		}
-
-		const formattedLabel = `${plainLabel.slice(0, dateLikeSuffix.index + 1)}\n${plainLabel.slice(dateLikeSuffix.index + 1)}`;
-		return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
+		if (dimensions.provider && dimensions.model) {
+			const plainModel = normalizeModelName(entry.model, entry.provider);
+			parts.push(`${entry.provider}/${plainModel}`);
+		} else {
+			if (dimensions.provider) {
+				parts.push(entry.provider);
+			}
+			if (dimensions.model) {
+				parts.push(modelLabelFn(entry));
+			}
+		}
 	}
 
-	const formattedLabel = `${plainLabel.slice(0, slashIndex + 1)}\n${plainLabel.slice(slashIndex + 1)}`;
-	return resolvedAlias.colorizer?.(formattedLabel) ?? formattedLabel;
+	const rawLabel = parts.join('/');
+	const resolved = resolveModelAlias(rawLabel);
+	return { key: resolved.label, colorizer: resolved.colorizer };
+}
+
+export function formatModelLabelForTable(modelLabel: string, colorizer?: Colorizer): string {
+	const color = colorizer ?? resolveModelAlias(modelLabel).colorizer;
+	const slashIndex = modelLabel.indexOf('/');
+	if (slashIndex <= 0) {
+		const dateLikeSuffix = modelLabel.match(/-(\d{6,})$/);
+		if (dateLikeSuffix == null || dateLikeSuffix.index == null) {
+			return color?.(modelLabel) ?? modelLabel;
+		}
+
+		const formattedLabel = `${modelLabel.slice(0, dateLikeSuffix.index + 1)}\n${modelLabel.slice(dateLikeSuffix.index + 1)}`;
+		return color?.(formattedLabel) ?? formattedLabel;
+	}
+
+	const formattedLabel = `${modelLabel.slice(0, slashIndex + 1)}\n${modelLabel.slice(slashIndex + 1)}`;
+	return color?.(formattedLabel) ?? formattedLabel;
 }
 
 export function applyModelAliasForDisplay(modelLabel: string): string {
