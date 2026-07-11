@@ -1289,3 +1289,28 @@ export function buildCompactRow(
 	row.push(inputStr, outputStr, costStr);
 	return row;
 }
+
+if (import.meta.vitest != null) {
+	describe('reasoning output display', () => {
+		const data: ModelTokenData = {
+			inputTokens: 0,
+			outputTokens: 15_577,
+			reasoningTokens: 12_147,
+			cacheCreationTokens: 0,
+			cacheReadTokens: 0,
+			totalCost: 0,
+		};
+
+		it('shows total output and reasoning share for per-model rows', () => {
+			expect(buildOutputCells(data, undefined, { showPercent: true })[0]).toMatchObject({
+				content: '15,577 r=78%',
+			});
+		});
+
+		it('shows the same total output definition for aggregate rows', () => {
+			expect(
+				buildAggregateOutputCells(15_577, 12_147, undefined, { showPercent: true })[0],
+			).toMatchObject({ content: '15,577 r=78%' });
+		});
+	});
+}

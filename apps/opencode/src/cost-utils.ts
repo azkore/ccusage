@@ -1,7 +1,9 @@
-import type { LiteLLMModelPricing, LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
+import type { LiteLLMModelPricing } from '@ccusage/internal/pricing';
 import type { LoadedUsageEntry } from './data-loader.ts';
+import { LiteLLMPricingFetcher } from '@ccusage/internal/pricing';
 import { formatNumber } from '@ccusage/terminal/table';
 import { Result } from '@praha/byethrow';
+
 import pc from 'picocolors';
 
 /**
@@ -405,4 +407,37 @@ export function formatInputColumn(
 
 	const realRate = formatRateNumber(totalInputCost, totalInput);
 	return `${formatNumber(totalInput)}\n$${realRate}/M→${pc.green(formatCurrencyValue(totalInputCost))}`;
+}
+
+if (import.meta.vitest != null) {
+	describe('calculateComponentCostsFromEntries', () => {
+		it('prices the full output total including reasoning', async () => {
+			using fetcher = new LiteLLMPricingFetcher({
+				offline: true,
+				offlineLoader: async () => ({
+					'gpt-5.3-codex': { output_cost_per_token: 14 / MILLION },
+				}),
+			});
+			const entry: LoadedUsageEntry = {
+				timestamp: new Date('2026-01-01T00:00:00Z'),
+				sessionID: 'session',
+				source: 'opencode',
+				provider: 'openai',
+				usage: {
+					inputTokens: 0,
+					outputTokens: 15_577,
+					reasoningTokens: 12_147,
+					cacheCreationInputTokens: 0,
+					cacheReadInputTokens: 0,
+				},
+				model: 'gpt-5.3-codex',
+				costUSD: null,
+			};
+
+			const costs = await calculateComponentCostsFromEntries([entry], entry.model, fetcher);
+
+			expect(costs.output.baseTierTokens).toBe(15_577);
+			expect(costs.output.baseTierCost).toBeCloseTo((15_577 * 14) / MILLION);
+		});
+	});
 }

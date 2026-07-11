@@ -294,11 +294,12 @@ export async function loadOpenCodeMessages(): Promise<LoadedUsageEntry[]> {
 		const entries: LoadedUsageEntry[] = [];
 		for (const row of rows) {
 			const inputTokens = row.input ?? 0;
-			const outputTokens = row.output ?? 0;
+			const visibleOutputTokens = row.output ?? 0;
 			const reasoningTokens = row.reasoning ?? 0;
-			if (inputTokens === 0 && outputTokens === 0 && reasoningTokens === 0) {
+			if (inputTokens === 0 && visibleOutputTokens === 0 && reasoningTokens === 0) {
 				continue;
 			}
+			const outputTokens = normalizeOutputTokens('opencode', visibleOutputTokens, reasoningTokens);
 
 			entries.push({
 				timestamp: new Date(row.time_created ?? Date.now()),
@@ -332,6 +333,19 @@ function asNumber(value: unknown): number {
 	}
 
 	return value;
+}
+
+/**
+ * Normalize output token counts so LoadedUsageEntry.outputTokens includes
+ * reasoning for every source. OpenCode stores visible output separately,
+ * while Claude and Codex report output totals that already include reasoning.
+ */
+function normalizeOutputTokens(
+	source: UsageSource,
+	outputTokens: number,
+	reasoningTokens: number,
+): number {
+	return source === 'opencode' ? outputTokens + reasoningTokens : outputTokens;
 }
 
 function inferProviderFromModel(model: string): string {
@@ -404,10 +418,11 @@ async function loadClaudeData(): Promise<{
 					}
 
 					const inputTokens = asNumber(usage.input_tokens);
-					const outputTokens = asNumber(usage.output_tokens);
+					const rawOutputTokens = asNumber(usage.output_tokens);
 					const cacheCreationInputTokens = asNumber(usage.cache_creation_input_tokens);
 					const cacheReadInputTokens = asNumber(usage.cache_read_input_tokens);
 					const reasoningTokens = asNumber(usage.reasoning_tokens);
+					const outputTokens = normalizeOutputTokens('claude', rawOutputTokens, reasoningTokens);
 
 					if (
 						inputTokens === 0 &&
@@ -732,7 +747,11 @@ async function loadCodexData(): Promise<{
 				provider: inferProviderFromModel(model),
 				usage: {
 					inputTokens: raw.input_tokens - cachedInput,
-					outputTokens: raw.output_tokens,
+					outputTokens: normalizeOutputTokens(
+						'codex',
+						raw.output_tokens,
+						raw.reasoning_output_tokens,
+					),
 					reasoningTokens: raw.reasoning_output_tokens,
 					cacheCreationInputTokens: 0,
 					cacheReadInputTokens: cachedInput,
@@ -796,4 +815,20 @@ export async function loadUsageData(source: UsageSource): Promise<{
 			codexData.sessionMetadataMap,
 		),
 	};
+}
+
+if (import.meta.vitest != null) {
+	describe('normalizeOutputTokens', () => {
+		it('adds separately stored OpenCode reasoning tokens to visible output', () => {
+			expect(normalizeOutputTokens('opencode', 3430, 12_147)).toBe(15_577);
+		});
+
+		it('does not double-count Codex reasoning included in output_tokens', () => {
+			expect(normalizeOutputTokens('codex', 15_577, 12_147)).toBe(15_577);
+		});
+
+		it('keeps Claude output totals unchanged', () => {
+			expect(normalizeOutputTokens('claude', 15_577, 12_147)).toBe(15_577);
+		});
+	});
 }
