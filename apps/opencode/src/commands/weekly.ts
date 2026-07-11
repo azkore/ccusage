@@ -6,6 +6,7 @@ import { formatModelsDisplayMultiline } from '@ccusage/terminal/table';
 import { groupBy } from 'es-toolkit';
 import { define } from 'gunshi';
 import {
+	breakdownColumnLabel,
 	formatBreakdownLabelForTable,
 	formatReportSourceLabel,
 	isDisplayedZeroCost,
@@ -420,6 +421,7 @@ export const weeklyCommand = define({
 		const table = createUsageTable({
 			firstColumnName: 'Week',
 			hasModelsColumn: true,
+			modelsColumnLabel: breakdownColumnLabel(groupingBreakdowns),
 			showPercent: includePercent,
 			splitValueDetailColumns,
 			splitPercentColumns,

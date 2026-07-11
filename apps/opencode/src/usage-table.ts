@@ -51,6 +51,8 @@ export type UsageTableConfig = {
 	firstColumnName: string;
 	/** Whether to include a "Models" column (false for model.ts which IS per-model) */
 	hasModelsColumn?: boolean;
+	/** Override label for the Models column (defaults to "Models") */
+	modelsColumnLabel?: string;
 	/** Whether percentage columns/details are enabled */
 	showPercent?: boolean;
 	/** Split value/detail into subcolumns for aggregate-only views */
@@ -878,7 +880,7 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 				? ['left', 'left', 'right', 'right', 'right']
 				: ['left', 'right', 'right', 'right'],
 			head: hasModels
-				? [config.firstColumnName, 'Models', 'Input', 'Output', 'Cost']
+				? [config.firstColumnName, config.modelsColumnLabel ?? 'Models', 'Input', 'Output', 'Cost']
 				: [config.firstColumnName, 'Input', 'Output', 'Cost'],
 		};
 		return new Table(compactOpts);
@@ -935,7 +937,11 @@ export function createUsageTable(config: UsageTableConfig): Table.Table {
 		{ content: pc.cyan(config.firstColumnName), rowSpan: 2, vAlign: 'center' },
 	];
 	if (hasModels) {
-		headerRow1.push({ content: pc.cyan('Models'), rowSpan: 2, vAlign: 'center' });
+		headerRow1.push({
+			content: pc.cyan(config.modelsColumnLabel ?? 'Models'),
+			rowSpan: 2,
+			vAlign: 'center',
+		});
 	}
 	if (splitValueDetailColumns) {
 		const outputColSpan = 2 + (splitPercentColumns.output ? 1 : 0);

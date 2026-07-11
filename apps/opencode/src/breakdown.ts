@@ -90,3 +90,26 @@ export function formatBreakdownLabelForTable(label: string, colorizer?: Colorize
 export function isDisplayedZeroCost(totalCost: number): boolean {
 	return Math.abs(totalCost) < 0.005;
 }
+
+const dimensionLabels: Record<string, string> = {
+	source: 'Source',
+	provider: 'Provider',
+	model: 'Model',
+	'full-model': 'Model',
+	project: 'Project',
+	session: 'Session',
+};
+
+/**
+ * Compute the column header label from active grouping dimensions.
+ * Returns "Models" when no breakdown is active (the column shows model lists).
+ */
+export function breakdownColumnLabel(groupingBreakdowns: BreakdownDimension[]): string {
+	if (groupingBreakdowns.length === 0) {
+		return 'Models';
+	}
+	const labels = [
+		...new Set(groupingBreakdowns.map((d) => dimensionLabels[d]).filter((l) => l != null)),
+	];
+	return labels.join('/');
+}
